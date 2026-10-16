@@ -111,7 +111,7 @@ object ReaderContent {
             append("-webkit-tap-highlight-color:transparent;will-change:transform;}")
             append("body *{color:inherit !important;background-color:transparent !important;border-color:${fg}33 !important;}")
             append("body p,body li,body blockquote,body div,body span,body dd,body dt,body td{line-height:inherit !important;}")
-            append("a,a *{color:$link !important;text-decoration:none !important;}")
+            append("a[href],a[href] *{color:$link !important;text-decoration:none !important;}")
             append("img,video,svg{max-width:100% !important;max-height:calc(100vh - 8px) !important;")
             append("object-fit:contain;break-inside:avoid;-webkit-column-break-inside:avoid;}")
             append("img,video{height:auto !important;}")
