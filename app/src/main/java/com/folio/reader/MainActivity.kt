@@ -3,6 +3,7 @@ package com.folio.reader
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -32,6 +33,18 @@ class MainActivity : ComponentActivity() {
         handleIntent(intent)
     }
 
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val handler = PageKeys.handler
+        val code = event.keyCode
+        if (handler != null && handler.enabled() &&
+            (code == KeyEvent.KEYCODE_VOLUME_DOWN || code == KeyEvent.KEYCODE_VOLUME_UP)
+        ) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) handler.turn(code == KeyEvent.KEYCODE_VOLUME_DOWN)
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
     private fun handleIntent(intent: Intent?) {
         val uri = when (intent?.action) {
             Intent.ACTION_VIEW -> intent.data
@@ -40,4 +53,11 @@ class MainActivity : ComponentActivity() {
         }
         if (uri != null) incoming.value = uri
     }
+}
+
+/** Lets the reader screen claim the volume keys for turning pages while it's open. */
+object PageKeys {
+    class Handler(val enabled: () -> Boolean, val turn: (forward: Boolean) -> Unit)
+
+    @Volatile var handler: Handler? = null
 }

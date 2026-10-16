@@ -10,10 +10,18 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+
+enum class Shelf(val label: String) { All("All"), Reading("Reading"), Unread("Not started"), Finished("Finished") }
+
+enum class SortOrder(val label: String) { Recent("Recently read"), Added("Recently added"), Title("Title"), Author("Author") }
+
+fun Book.isFinished() = progress >= 0.995f
+fun Book.isReading() = lastOpenedAt > 0 && !isFinished()
 
 sealed interface LibraryEvent {
     data class Message(val text: String) : LibraryEvent
@@ -23,10 +31,42 @@ sealed interface LibraryEvent {
 class LibraryViewModel(private val app: FolioApp) : ViewModel() {
     private val library = app.library
 
-    /** Most recently read first, then most recently added. */
-    val books: StateFlow<List<Book>> = library.books
-        .map { list -> list.sortedWith(compareByDescending<Book> { it.lastOpenedAt }.thenByDescending { it.addedAt }) }
+    val allBooks: StateFlow<List<Book>> = library.books
+
+    val query = MutableStateFlow("")
+    val shelf = MutableStateFlow(Shelf.All)
+    val sort = MutableStateFlow(SortOrder.Recent)
+
+    /** Books still being read, most recent first, for the "Continue reading" row. */
+    val continueReading: StateFlow<List<Book>> = library.books
+        .map { list -> list.filter { it.isReading() }.sortedByDescending { it.lastOpenedAt }.take(8) }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /** The grid: filtered by shelf and search, in the chosen order. */
+    val books: StateFlow<List<Book>> = combine(library.books, query, shelf, sort) { list, q, s, order ->
+        val needle = q.trim()
+        list
+            .filter {
+                when (s) {
+                    Shelf.All -> true
+                    Shelf.Reading -> it.isReading()
+                    Shelf.Unread -> it.lastOpenedAt == 0L
+                    Shelf.Finished -> it.isFinished()
+                }
+            }
+            .filter {
+                needle.isEmpty() || it.title.contains(needle, ignoreCase = true) ||
+                    (it.author?.contains(needle, ignoreCase = true) == true)
+            }
+            .sortedWith(
+                when (order) {
+                    SortOrder.Recent -> compareByDescending<Book> { it.lastOpenedAt }.thenByDescending { it.addedAt }
+                    SortOrder.Added -> compareByDescending<Book> { it.addedAt }
+                    SortOrder.Title -> compareBy<Book> { it.title.lowercase().removePrefix("the ").removePrefix("a ") }
+                    SortOrder.Author -> compareBy<Book> { it.author?.lowercase() ?: "\uFFFF" }.thenBy { it.title.lowercase() }
+                },
+            )
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     private val _importing = MutableStateFlow(false)
     val importing: StateFlow<Boolean> = _importing.asStateFlow()

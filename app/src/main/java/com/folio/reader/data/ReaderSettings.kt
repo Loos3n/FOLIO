@@ -6,16 +6,17 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 enum class ReaderTheme(val label: String, val background: Long, val text: Long, val link: Long, val isDark: Boolean) {
-    Light("Light", 0xFFFFFFFF, 0xFF1F1F1F, 0xFF2D5DA8, false),
-    Sepia("Sepia", 0xFFF6EEDC, 0xFF433422, 0xFF8A5A1C, false),
-    Dark("Dark", 0xFF1E1F22, 0xFFDCDCDC, 0xFF8AB4F8, true),
-    Black("Black", 0xFF000000, 0xFFBDBDBD, 0xFF8AB4F8, true),
+    Light("Paper", 0xFFFCFBF8, 0xFF26231F, 0xFF2F5FA7, false),
+    Sepia("Sepia", 0xFFF3E9D2, 0xFF4A3A28, 0xFF8A5A1C, false),
+    Dark("Dusk", 0xFF1D1C21, 0xFFE3DFD8, 0xFF9BBCF2, true),
+    Black("Night", 0xFF000000, 0xFFB9B5AE, 0xFF8AB4F8, true),
 }
 
 enum class ReaderFont(val label: String, val css: String?) {
-    Original("Book", null),
-    Serif("Serif", "Georgia, 'Noto Serif', serif"),
-    Sans("Sans", "'Roboto', 'Noto Sans', sans-serif"),
+    Original("Book's own", null),
+    Literata("Literata", "'Folio Literata', Georgia, serif"),
+    Inter("Inter", "'Folio Inter', 'Roboto', sans-serif"),
+    Atkinson("Atkinson", "'Folio Atkinson', 'Roboto', sans-serif"),
 }
 
 data class ReaderSettings(
@@ -23,11 +24,13 @@ data class ReaderSettings(
     val textZoom: Int = 110,
     val lineHeight: Float = 1.6f,
     /** Horizontal page margin in CSS px. */
-    val margin: Int = 20,
+    val margin: Int = 24,
     /** null = follow the system light/dark setting. */
     val theme: ReaderTheme? = null,
-    val font: ReaderFont = ReaderFont.Serif,
-    val justify: Boolean = false,
+    val font: ReaderFont = ReaderFont.Literata,
+    val justify: Boolean = true,
+    /** Volume up/down turn pages while reading. */
+    val volumeKeys: Boolean = true,
 ) {
     fun resolvedTheme(systemDark: Boolean): ReaderTheme =
         theme ?: if (systemDark) ReaderTheme.Dark else ReaderTheme.Light
@@ -49,6 +52,7 @@ class SettingsRepository(context: Context) {
             .putString("theme", next.theme?.name)
             .putString("font", next.font.name)
             .putBoolean("justify", next.justify)
+            .putBoolean("volumeKeys", next.volumeKeys)
             .apply()
     }
 
@@ -61,6 +65,7 @@ class SettingsRepository(context: Context) {
             theme = prefs.getString("theme", null)?.let { n -> ReaderTheme.entries.firstOrNull { it.name == n } },
             font = prefs.getString("font", null)?.let { n -> ReaderFont.entries.firstOrNull { it.name == n } } ?: d.font,
             justify = prefs.getBoolean("justify", d.justify),
+            volumeKeys = prefs.getBoolean("volumeKeys", d.volumeKeys),
         )
     }
 }

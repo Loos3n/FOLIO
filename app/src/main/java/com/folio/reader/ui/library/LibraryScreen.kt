@@ -9,40 +9,55 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsTopHeight
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LargeTopAppBar
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -51,7 +66,6 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -63,24 +77,33 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.folio.reader.data.Book
+import java.util.Calendar
 import kotlin.math.roundToInt
 
 private val EPUB_TYPES = arrayOf("application/epub+zip", "application/octet-stream")
+private val CoverShape = RoundedCornerShape(topStart = 4.dp, bottomStart = 4.dp, topEnd = 10.dp, bottomEnd = 10.dp)
 
 @Composable
 fun LibraryScreen(
     vm: LibraryViewModel,
     onOpen: (String) -> Unit,
 ) {
+    val allBooks by vm.allBooks.collectAsStateWithLifecycle()
     val books by vm.books.collectAsStateWithLifecycle()
+    val continueReading by vm.continueReading.collectAsStateWithLifecycle()
+    val query by vm.query.collectAsStateWithLifecycle()
+    val shelf by vm.shelf.collectAsStateWithLifecycle()
+    val sort by vm.sort.collectAsStateWithLifecycle()
     val importing by vm.importing.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     var pendingDelete by remember { mutableStateOf<Book?>(null) }
@@ -99,75 +122,88 @@ fun LibraryScreen(
         }
     }
 
-    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val gridState = rememberLazyGridState()
-    val fabExpanded by remember { derivedStateOf { gridState.firstVisibleItemIndex == 0 } }
-    val current = books.firstOrNull { it.lastOpenedAt > 0 && it.progress < 0.995f }
+    val fabExpanded by remember { derivedStateOf { gridState.firstVisibleItemIndex < 2 } }
 
     Scaffold(
-        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
-        topBar = {
-            Column {
-                LargeTopAppBar(
-                    title = { Text("Library") },
-                    scrollBehavior = scrollBehavior,
-                )
-                AnimatedVisibility(importing) {
-                    LinearProgressIndicator(Modifier.fillMaxWidth())
-                }
-            }
-        },
+        contentWindowInsets = WindowInsets(0),
         floatingActionButton = {
-            if (books.isNotEmpty()) {
+            if (allBooks.isNotEmpty()) {
                 ExtendedFloatingActionButton(
                     onClick = pickBooks,
                     expanded = fabExpanded,
                     icon = { Icon(Icons.Filled.Add, contentDescription = null) },
                     text = { Text("Add books") },
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.padding(WindowInsets.navigationBars.asPaddingValues()),
                 )
             }
         },
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
-        if (books.isEmpty()) {
-            EmptyLibrary(onAdd = pickBooks, modifier = Modifier.padding(padding))
+        if (allBooks.isEmpty()) {
+            EmptyLibrary(importing = importing, onAdd = pickBooks, modifier = Modifier.padding(padding))
             return@Scaffold
         }
-        LazyVerticalGrid(
-            state = gridState,
-            columns = GridCells.Adaptive(minSize = 104.dp),
-            contentPadding = PaddingValues(
-                start = 16.dp,
-                end = 16.dp,
-                top = padding.calculateTopPadding() + 4.dp,
-                bottom = padding.calculateBottomPadding() + 96.dp,
-            ),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp),
-            modifier = Modifier.fillMaxSize(),
-        ) {
-            if (current != null) {
-                item(span = { GridItemSpan(maxLineSpan) }, key = "continue") {
-                    ContinueReadingCard(current, vm, onOpen)
+        Box(Modifier.fillMaxSize().padding(padding)) {
+            LazyVerticalGrid(
+                state = gridState,
+                columns = GridCells.Adaptive(minSize = 108.dp),
+                contentPadding = PaddingValues(
+                    start = 20.dp,
+                    end = 20.dp,
+                    top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 12.dp,
+                    bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 104.dp,
+                ),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalArrangement = Arrangement.spacedBy(22.dp),
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                item(span = { GridItemSpan(maxLineSpan) }, key = "header") {
+                    Header(count = allBooks.size, importing = importing, sort = sort, onSort = { vm.sort.value = it })
+                }
+                item(span = { GridItemSpan(maxLineSpan) }, key = "search") {
+                    SearchField(query = query, onQuery = { vm.query.value = it })
+                }
+                if (continueReading.isNotEmpty() && query.isBlank()) {
+                    item(span = { GridItemSpan(maxLineSpan) }, key = "continue") {
+                        ContinueReadingRow(continueReading, vm, onOpen)
+                    }
+                }
+                item(span = { GridItemSpan(maxLineSpan) }, key = "shelves") {
+                    ShelfChips(shelf = shelf, onShelf = { vm.shelf.value = it })
+                }
+                if (books.isEmpty()) {
+                    item(span = { GridItemSpan(maxLineSpan) }, key = "nothing") {
+                        Text(
+                            if (query.isNotBlank()) "No books match “${query.trim()}”." else "Nothing on this shelf yet.",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 40.dp),
+                        )
+                    }
+                }
+                items(books, key = { it.id }) { book ->
+                    BookTile(
+                        book = book,
+                        vm = vm,
+                        onOpen = { onOpen(book.id) },
+                        onDelete = { pendingDelete = book },
+                        modifier = Modifier.animateItem(),
+                    )
                 }
             }
-            item(span = { GridItemSpan(maxLineSpan) }, key = "header") {
-                Text(
-                    "All books · ${books.size}",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp),
-                )
-            }
-            items(books, key = { it.id }) { book ->
-                BookTile(
-                    book = book,
-                    vm = vm,
-                    onOpen = { onOpen(book.id) },
-                    onDelete = { pendingDelete = book },
-                    modifier = Modifier.animateItem(),
-                )
-            }
+            // Keeps scrolled content from running under the status bar icons.
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .windowInsetsTopHeight(WindowInsets.statusBars)
+                    .background(MaterialTheme.colorScheme.background.copy(alpha = 0.94f)),
+            )
         }
     }
 
@@ -188,67 +224,220 @@ fun LibraryScreen(
     }
 }
 
+private fun greeting(): String = when (Calendar.getInstance().get(Calendar.HOUR_OF_DAY)) {
+    in 5..11 -> "Good morning"
+    in 12..16 -> "Good afternoon"
+    in 17..21 -> "Good evening"
+    else -> "Reading late?"
+}
+
 @Composable
-private fun ContinueReadingCard(book: Book, vm: LibraryViewModel, onOpen: (String) -> Unit) {
-    Card(
-        onClick = { onOpen(book.id) },
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            BookCover(
-                title = book.title,
-                author = book.author,
-                file = vm.coverFile(book),
-                modifier = Modifier
-                    .width(84.dp)
-                    .aspectRatio(2f / 3f)
-                    .shadow(6.dp, RoundedCornerShape(10.dp))
-                    .clip(RoundedCornerShape(10.dp)),
-            )
-            Spacer(Modifier.width(16.dp))
+private fun Header(count: Int, importing: Boolean, sort: SortOrder, onSort: (SortOrder) -> Unit) {
+    var menuOpen by remember { mutableStateOf(false) }
+    Column {
+        Row(verticalAlignment = Alignment.Bottom) {
             Column(Modifier.weight(1f)) {
                 Text(
-                    "Continue reading",
+                    greeting(),
                     style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f),
+                    color = MaterialTheme.colorScheme.primary,
                 )
-                Spacer(Modifier.height(4.dp))
+                Text("Your library", style = MaterialTheme.typography.displaySmall)
                 Text(
-                    book.title,
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
+                    if (count == 1) "1 book" else "$count books",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if (book.author != null) {
+            }
+            Box {
+                TextButton(onClick = { menuOpen = true }) { Text(sort.label) }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    SortOrder.entries.forEach { option ->
+                        DropdownMenuItem(
+                            text = { Text(option.label) },
+                            leadingIcon = {
+                                if (option == sort) Icon(Icons.Filled.Check, contentDescription = null)
+                                else Spacer(Modifier.size(24.dp))
+                            },
+                            onClick = {
+                                onSort(option)
+                                menuOpen = false
+                            },
+                        )
+                    }
+                }
+            }
+        }
+        AnimatedVisibility(importing) {
+            LinearProgressIndicator(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(top = 12.dp)
+                    .clip(CircleShape),
+            )
+        }
+    }
+}
+
+@Composable
+private fun SearchField(query: String, onQuery: (String) -> Unit) {
+    Surface(
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Filled.Search,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.width(12.dp))
+            Box(
+                Modifier
+                    .weight(1f)
+                    .padding(vertical = 12.dp),
+            ) {
+                if (query.isEmpty()) {
                     Text(
-                        book.author,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                        "Search titles and authors",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                Spacer(Modifier.height(12.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                BasicTextField(
+                    value = query,
+                    onValueChange = onQuery,
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            if (query.isNotEmpty()) {
+                IconButton(onClick = { onQuery("") }, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Filled.Clear, contentDescription = "Clear search")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ContinueReadingRow(books: List<Book>, vm: LibraryViewModel, onOpen: (String) -> Unit) {
+    Column {
+        Text("Continue reading", style = MaterialTheme.typography.titleLarge)
+        Spacer(Modifier.height(12.dp))
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            // Let cards scroll edge to edge past the grid's side padding.
+            contentPadding = PaddingValues(horizontal = 20.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .layoutBleed(20.dp),
+        ) {
+            items(books, key = { it.id }) { book -> ContinueCard(book, vm, onOpen, single = books.size == 1) }
+        }
+    }
+}
+
+/** Widens a full-span grid item by [bleed] on each side so a carousel can reach the screen edges. */
+private fun Modifier.layoutBleed(bleed: Dp) = this.then(
+    Modifier.layout { measurable, constraints ->
+        val extra = (bleed * 2).roundToPx()
+        val placeable = measurable.measure(constraints.copy(maxWidth = constraints.maxWidth + extra, minWidth = constraints.minWidth + extra))
+        layout(constraints.maxWidth, placeable.height) { placeable.place(-extra / 2, 0) }
+    },
+)
+
+@Composable
+private fun ContinueCard(book: Book, vm: LibraryViewModel, onOpen: (String) -> Unit, single: Boolean) {
+    val scheme = MaterialTheme.colorScheme
+    Surface(
+        onClick = { onOpen(book.id) },
+        shape = RoundedCornerShape(28.dp),
+        color = scheme.primaryContainer,
+        contentColor = scheme.onPrimaryContainer,
+        modifier = Modifier.width(if (single) 340.dp else 300.dp),
+    ) {
+        Box(
+            Modifier.background(
+                Brush.linearGradient(listOf(scheme.primaryContainer, scheme.secondaryContainer.copy(alpha = 0.6f))),
+            ),
+        ) {
+            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                BookCover(
+                    title = book.title,
+                    author = book.author,
+                    file = vm.coverFile(book),
+                    modifier = Modifier
+                        .width(86.dp)
+                        .aspectRatio(2f / 3f)
+                        .shadow(10.dp, CoverShape)
+                        .clip(CoverShape),
+                )
+                Spacer(Modifier.width(16.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        book.title,
+                        style = MaterialTheme.typography.titleLarge,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (book.author != null) {
+                        Text(
+                            book.author,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = scheme.onPrimaryContainer.copy(alpha = 0.75f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Spacer(Modifier.height(14.dp))
                     LinearProgressIndicator(
                         progress = { book.progress },
                         modifier = Modifier
-                            .weight(1f)
+                            .fillMaxWidth()
                             .height(6.dp)
-                            .clip(RoundedCornerShape(3.dp)),
-                        trackColor = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.15f),
+                            .clip(CircleShape),
+                        color = scheme.primary,
+                        trackColor = scheme.onPrimaryContainer.copy(alpha = 0.12f),
                     )
-                    Spacer(Modifier.width(10.dp))
+                    Spacer(Modifier.height(6.dp))
                     Text(
-                        "${(book.progress * 100).roundToInt()}%",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        "${(book.progress * 100).roundToInt()}% read",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = scheme.onPrimaryContainer.copy(alpha = 0.8f),
                     )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun ShelfChips(shelf: Shelf, onShelf: (Shelf) -> Unit) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier
+            .layoutBleed(20.dp)
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp)
+            .padding(top = 4.dp),
+    ) {
+        Shelf.entries.forEach { option ->
+            FilterChip(
+                selected = shelf == option,
+                onClick = { onShelf(option) },
+                label = { Text(option.label) },
+                shape = CircleShape,
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                ),
+            )
         }
     }
 }
@@ -268,31 +457,17 @@ private fun BookTile(
                 Modifier
                     .fillMaxWidth()
                     .aspectRatio(2f / 3f)
-                    .shadow(4.dp, RoundedCornerShape(12.dp))
-                    .clip(RoundedCornerShape(12.dp))
+                    .shadow(8.dp, CoverShape, ambientColor = MaterialTheme.colorScheme.onSurface)
+                    .clip(CoverShape)
                     .combinedClickable(onClick = onOpen, onLongClick = { menuOpen = true }),
             ) {
                 BookCover(book.title, book.author, vm.coverFile(book), Modifier.fillMaxSize())
                 when {
-                    book.progress >= 0.995f -> Badge("Finished", Modifier.align(Alignment.TopEnd))
+                    book.isFinished() -> Badge("Finished", Modifier.align(Alignment.TopEnd), icon = true)
                     book.lastOpenedAt == 0L -> Badge("New", Modifier.align(Alignment.TopEnd))
-                    else -> Box(
-                        Modifier
-                            .align(Alignment.BottomStart)
-                            .fillMaxWidth()
-                            .height(4.dp)
-                            .background(Color.Black.copy(alpha = 0.35f)),
-                    ) {
-                        Box(
-                            Modifier
-                                .fillMaxWidth(book.progress.coerceIn(0.02f, 1f))
-                                .height(4.dp)
-                                .background(MaterialTheme.colorScheme.primary),
-                        )
-                    }
                 }
             }
-            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }, offset = androidx.compose.ui.unit.DpOffset(8.dp, 0.dp)) {
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }, offset = DpOffset(8.dp, 0.dp)) {
                 if (book.lastOpenedAt > 0) {
                     DropdownMenuItem(
                         text = { Text("Mark as unread") },
@@ -313,11 +488,31 @@ private fun BookTile(
                 )
             }
         }
-        Spacer(Modifier.height(8.dp))
+        if (book.isReading()) {
+            Spacer(Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                LinearProgressIndicator(
+                    progress = { book.progress },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(4.dp)
+                        .clip(CircleShape),
+                    trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "${(book.progress * 100).roundToInt()}%",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.height(4.dp))
+        } else {
+            Spacer(Modifier.height(10.dp))
+        }
         Text(
             book.title,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.Medium,
+            style = MaterialTheme.typography.titleSmall,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
@@ -334,19 +529,25 @@ private fun BookTile(
 }
 
 @Composable
-private fun Badge(text: String, modifier: Modifier = Modifier) {
+private fun Badge(text: String, modifier: Modifier = Modifier, icon: Boolean = false) {
     Surface(
-        color = MaterialTheme.colorScheme.tertiaryContainer,
-        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
-        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.primary,
+        contentColor = MaterialTheme.colorScheme.onPrimary,
+        shape = CircleShape,
         modifier = modifier.padding(6.dp),
     ) {
-        Text(text, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp))
+        Row(Modifier.padding(horizontal = 8.dp, vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (icon) {
+                Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(12.dp))
+                Spacer(Modifier.width(3.dp))
+            }
+            Text(text, style = MaterialTheme.typography.labelSmall)
+        }
     }
 }
 
 @Composable
-private fun EmptyLibrary(onAdd: () -> Unit, modifier: Modifier = Modifier) {
+private fun EmptyLibrary(importing: Boolean, onAdd: () -> Unit, modifier: Modifier = Modifier) {
     Column(
         modifier
             .fillMaxSize()
@@ -355,44 +556,48 @@ private fun EmptyLibrary(onAdd: () -> Unit, modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.Center,
     ) {
         // A little fanned stack of books.
-        Box(Modifier.size(width = 160.dp, height = 130.dp), contentAlignment = Alignment.BottomCenter) {
-            val shape = RoundedCornerShape(10.dp)
+        Box(Modifier.size(width = 180.dp, height = 140.dp), contentAlignment = Alignment.BottomCenter) {
             Box(
                 Modifier
-                    .offset(x = (-38).dp, y = (-4).dp)
-                    .size(64.dp, 96.dp)
-                    .clip(shape)
-                    .background(MaterialTheme.colorScheme.tertiaryContainer),
-            )
-            Box(
-                Modifier
-                    .offset(x = 38.dp, y = (-4).dp)
-                    .size(64.dp, 96.dp)
-                    .clip(shape)
+                    .offset(x = (-44).dp, y = (-2).dp)
+                    .size(68.dp, 102.dp)
+                    .shadow(4.dp, CoverShape)
+                    .clip(CoverShape)
                     .background(MaterialTheme.colorScheme.secondaryContainer),
             )
             Box(
                 Modifier
-                    .size(72.dp, 108.dp)
-                    .shadow(8.dp, shape)
-                    .clip(shape)
-                    .background(MaterialTheme.colorScheme.primary),
+                    .offset(x = 44.dp, y = (-2).dp)
+                    .size(68.dp, 102.dp)
+                    .shadow(4.dp, CoverShape)
+                    .clip(CoverShape)
+                    .background(MaterialTheme.colorScheme.tertiaryContainer),
             )
+            Box(
+                Modifier
+                    .size(78.dp, 117.dp)
+                    .shadow(12.dp, CoverShape)
+                    .clip(CoverShape)
+                    .background(MaterialTheme.colorScheme.primary),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Filled.Star, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimary)
+            }
         }
-        Spacer(Modifier.height(28.dp))
-        Text("Your library is empty", style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center)
+        Spacer(Modifier.height(32.dp))
+        Text("Start your library", style = MaterialTheme.typography.headlineMedium, textAlign = TextAlign.Center)
         Spacer(Modifier.height(8.dp))
         Text(
-            "Add EPUB books from your phone and they'll show up here, ready to read.",
+            "Add EPUB books from your phone and they'll appear here, ready to read.",
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
         )
-        Spacer(Modifier.height(24.dp))
-        FilledTonalButton(onClick = onAdd) {
+        Spacer(Modifier.height(28.dp))
+        FilledTonalButton(onClick = onAdd, enabled = !importing, contentPadding = PaddingValues(horizontal = 24.dp, vertical = 14.dp)) {
             Icon(Icons.Filled.Add, contentDescription = null)
             Spacer(Modifier.width(8.dp))
-            Text("Add books")
+            Text(if (importing) "Adding…" else "Add books")
         }
     }
 }

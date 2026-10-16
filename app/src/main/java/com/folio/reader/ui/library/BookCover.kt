@@ -21,11 +21,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -49,14 +49,14 @@ private object CoverCache {
 }
 
 private val placeholderPalettes = listOf(
-    Color(0xFF3D5A80) to Color(0xFF98C1D9),
-    Color(0xFF6D597A) to Color(0xFFB56576),
-    Color(0xFF2A9D8F) to Color(0xFF8AB17D),
-    Color(0xFFBC6C25) to Color(0xFFDDA15E),
-    Color(0xFF264653) to Color(0xFF2A9D8F),
-    Color(0xFF9D0208) to Color(0xFFE85D04),
-    Color(0xFF283618) to Color(0xFF606C38),
-    Color(0xFF5E548E) to Color(0xFF9F86C0),
+    Color(0xFF2F4858) to Color(0xFFF6AE2D),
+    Color(0xFF5B3E31) to Color(0xFFE9C46A),
+    Color(0xFF264653) to Color(0xFFE9C46A),
+    Color(0xFF7D4E57) to Color(0xFFF4D6CC),
+    Color(0xFF3D405B) to Color(0xFFF2CC8F),
+    Color(0xFF1B4332) to Color(0xFFD8F3DC),
+    Color(0xFF6D2E46) to Color(0xFFECE2D0),
+    Color(0xFF22333B) to Color(0xFFC6AC8F),
 )
 
 @Composable
@@ -67,27 +67,43 @@ fun BookCover(title: String, author: String?, file: File?, modifier: Modifier = 
         }
     }
     val bitmap = image
-    if (bitmap != null) {
-        Image(bitmap, contentDescription = title, contentScale = ContentScale.Crop, modifier = modifier)
-    } else {
-        GeneratedCover(title, author, modifier)
+    Box(modifier) {
+        if (bitmap != null) {
+            Image(bitmap, contentDescription = title, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+        } else {
+            GeneratedCover(title, author, Modifier.fillMaxSize())
+        }
+        // A soft spine shadow and page sheen so covers read as physical books.
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.horizontalGradient(
+                        0f to Color.Black.copy(alpha = 0.22f),
+                        0.035f to Color.White.copy(alpha = 0.12f),
+                        0.07f to Color.Transparent,
+                        1f to Color.Transparent,
+                    ),
+                ),
+        )
     }
 }
 
-/** A tasteful stand-in for books that ship without cover art. */
+/** A designed stand-in for books that ship without cover art. */
 @Composable
 private fun GeneratedCover(title: String, author: String?, modifier: Modifier) {
-    val (dark, light) = placeholderPalettes[title.hashCode().absoluteValue % placeholderPalettes.size]
-    Box(modifier.background(Brush.linearGradient(listOf(dark, light)))) {
-        Column(Modifier.fillMaxSize().padding(12.dp)) {
-            Box(Modifier.width(24.dp).height(3.dp).background(Color.White.copy(alpha = 0.7f)))
+    val (base, accent) = placeholderPalettes[title.hashCode().absoluteValue % placeholderPalettes.size]
+    val display = MaterialTheme.typography.headlineSmall.fontFamily
+    Box(modifier.background(base)) {
+        Column(Modifier.fillMaxSize().padding(start = 14.dp, end = 12.dp, top = 14.dp, bottom = 12.dp)) {
+            Box(Modifier.width(22.dp).height(2.dp).background(accent))
             Spacer(Modifier.height(10.dp))
             Text(
                 title,
                 color = Color.White,
-                fontFamily = FontFamily.Serif,
+                fontFamily = display,
                 fontWeight = FontWeight.SemiBold,
-                fontSize = 15.sp,
+                fontSize = 16.sp,
                 lineHeight = 19.sp,
                 maxLines = 5,
                 overflow = TextOverflow.Ellipsis,
@@ -95,9 +111,11 @@ private fun GeneratedCover(title: String, author: String?, modifier: Modifier) {
             Spacer(Modifier.weight(1f))
             if (author != null) {
                 Text(
-                    author,
-                    color = Color.White.copy(alpha = 0.85f),
-                    fontSize = 11.sp,
+                    author.uppercase(),
+                    color = accent,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 1.2.sp,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.fillMaxWidth(),

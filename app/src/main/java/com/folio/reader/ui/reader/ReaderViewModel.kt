@@ -36,6 +36,11 @@ data class ReaderUiState(
     val progress: Float = 0f,
     /** Index into [toc] of the entry the reader is currently in. */
     val currentTocIndex: Int = -1,
+    /** Page within the current chapter, and how many pages it has (0 until laid out). */
+    val page: Int = 0,
+    val pageCount: Int = 0,
+    /** False while a chapter is being loaded and laid out. */
+    val chapterReady: Boolean = false,
 )
 
 class ReaderViewModel(private val app: FolioApp, private val bookId: String) : ViewModel() {
@@ -103,14 +108,16 @@ class ReaderViewModel(private val app: FolioApp, private val bookId: String) : V
         _request.value = ChapterRequest(_state.value.chapterIndex, chapterOffset, null)
     }
 
+    fun hasNextChapter() = _state.value.let { it.chapterIndex < it.chapterCount - 1 }
+
+    fun hasPrevChapter() = _state.value.chapterIndex > 0
+
     fun nextChapter() {
-        val s = _state.value
-        if (s.chapterIndex < s.chapterCount - 1) show(s.chapterIndex + 1, 0f, null)
+        if (hasNextChapter()) show(_state.value.chapterIndex + 1, 0f, null)
     }
 
     fun prevChapter() {
-        val s = _state.value
-        if (s.chapterIndex > 0) show(s.chapterIndex - 1, 1f, null)
+        if (hasPrevChapter()) show(_state.value.chapterIndex - 1, 1f, null)
     }
 
     fun openToc(entry: TocEntry) {
@@ -139,9 +146,10 @@ class ReaderViewModel(private val app: FolioApp, private val bookId: String) : V
         }
     }
 
-    /** Called from the page as the reader scrolls. */
-    fun onScroll(offset: Float) {
+    /** Called from the page whenever the reader lands on a page. */
+    fun onPage(page: Int, count: Int, offset: Float) {
         chapterOffset = offset
+        _state.update { it.copy(page = page, pageCount = count, chapterReady = true) }
         updateProgress()
         scheduleSave()
     }
@@ -160,7 +168,12 @@ class ReaderViewModel(private val app: FolioApp, private val bookId: String) : V
         val epub = book ?: return
         chapterOffset = offset
         _state.update {
-            it.copy(chapterIndex = index, chapterTitle = titleFor(epub, index), currentTocIndex = tocIndexFor(epub, index))
+            it.copy(
+                chapterIndex = index,
+                chapterTitle = titleFor(epub, index),
+                currentTocIndex = tocIndexFor(epub, index),
+                chapterReady = it.chapterReady && it.chapterIndex == index,
+            )
         }
         updateProgress()
         _request.value = ChapterRequest(index, offset, fragment)
