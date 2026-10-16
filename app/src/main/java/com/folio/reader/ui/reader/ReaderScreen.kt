@@ -13,6 +13,7 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -194,13 +195,31 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
                     request = request,
                     prefs = settings,
                     theme = theme,
-                    ready = state.chapterReady,
                     onTap = onTap,
                     onCreated = { webView = it },
                     modifier = Modifier
                         .fillMaxSize()
                         .windowInsetsPadding(WindowInsets.systemBarsIgnoringVisibility.union(WindowInsets.displayCutout))
                         .padding(top = 30.dp, bottom = 30.dp),
+                )
+            }
+
+            // Cover a chapter while it lays out, then fade it away to reveal the first page.
+            // (A Compose overlay rather than WebView alpha, which some WebViews never redraw.)
+            var layoutTimedOut by remember(request) { mutableStateOf(false) }
+            LaunchedEffect(request) {
+                delay(1_500)
+                layoutTimedOut = true
+            }
+            AnimatedVisibility(
+                visible = !state.loading && state.error == null && !state.chapterReady && !layoutTimedOut,
+                enter = EnterTransition.None,
+                exit = fadeOut(tween(200)),
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(Color(theme.background)),
                 )
             }
 
@@ -302,7 +321,6 @@ private fun BookWebView(
     request: ChapterRequest?,
     prefs: ReaderSettings,
     theme: ReaderTheme,
-    ready: Boolean,
     onTap: (Int) -> Unit,
     onCreated: (WebView?) -> Unit,
     modifier: Modifier = Modifier,
@@ -315,7 +333,6 @@ private fun BookWebView(
     val webView = remember {
         WebView(context).apply {
             setBackgroundColor(theme.background.toInt())
-            alpha = 0f
             isVerticalScrollBarEnabled = false
             isHorizontalScrollBarEnabled = false
             overScrollMode = View.OVER_SCROLL_NEVER
@@ -383,12 +400,6 @@ private fun BookWebView(
         val r = request ?: return@LaunchedEffect
         val path = vm.book?.spine?.getOrNull(r.index)?.path ?: return@LaunchedEffect
         webView.loadUrl(ReaderContent.urlFor(path))
-    }
-
-    // Hide a chapter while it lays out, then fade it in on its first page.
-    LaunchedEffect(ready) {
-        webView.animate().cancel()
-        if (ready) webView.animate().alpha(1f).setDuration(180).start() else webView.alpha = 0f
     }
 
     LaunchedEffect(css) {

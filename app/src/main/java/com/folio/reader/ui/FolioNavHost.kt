@@ -25,7 +25,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.filterNotNull
 
 @Composable
-fun FolioNavHost(incoming: MutableStateFlow<Uri?>) {
+fun FolioNavHost(incoming: MutableStateFlow<Uri?>, openBook: MutableStateFlow<String?>) {
     val nav = rememberNavController()
     // Scoped to the activity so "Open with" imports keep going while the reader is on screen.
     val libraryVm: LibraryViewModel = viewModel(
@@ -39,6 +39,13 @@ fun FolioNavHost(incoming: MutableStateFlow<Uri?>) {
             incoming.value = null
             nav.popBackStack("library", inclusive = false)
             libraryVm.import(listOf(uri), openAfter = true)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        openBook.filterNotNull().collect { id ->
+            openBook.value = null
+            nav.navigate("reader/$id") { launchSingleTop = true }
         }
     }
 

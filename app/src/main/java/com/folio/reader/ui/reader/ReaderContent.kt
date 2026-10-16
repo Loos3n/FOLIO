@@ -102,7 +102,7 @@ object ReaderContent {
             // script moves between them. --folio-w is set by the script to the real viewport width.
             append("html{margin:0 !important;padding:0 ${m}px !important;height:100vh !important;width:auto !important;")
             append("max-width:none !important;box-sizing:border-box !important;overflow:hidden !important;")
-            append("background:$bg !important;color:$fg !important;-webkit-text-size-adjust:none;}")
+            append("background:$bg !important;color:$fg !important;}")
             append("body{margin:0 !important;padding:0 !important;height:100vh !important;width:auto !important;")
             append("max-width:none !important;box-sizing:border-box !important;background:$bg !important;color:$fg !important;")
             append("-webkit-column-width:calc(var(--folio-w,100vw) - ${2 * m}px) !important;column-width:calc(var(--folio-w,100vw) - ${2 * m}px) !important;")
@@ -158,11 +158,11 @@ object ReaderContent {
           var anim = null;
           var curX = 0;
 
-          function width() { return window.innerWidth || root.clientWidth; }
+          function width() { return window.innerWidth || root.clientWidth || 0; }
           function setWidthVar() { root.style.setProperty('--folio-w', width() + 'px'); }
           function pageCount() {
             var body = document.body;
-            if (!body) return 1;
+            if (!body || width() < 10) return 1;
             return Math.max(1, Math.round((body.scrollWidth + 2 * parseFloat(getComputedStyle(root).paddingLeft || '0')) / width()));
           }
           function lastPage() { return pageCount() - 1; }
@@ -211,8 +211,12 @@ object ReaderContent {
             show(p, false);
           }
 
-          document.addEventListener('DOMContentLoaded', restore);
-          window.addEventListener('load', function () {
+          // The WebView can load a chapter before it has been given a size; only lay out
+          // pages (and tell the app we're ready) once the viewport is real.
+          var loaded = false;
+          function hasSize() { return width() > 10 && window.innerHeight > 10; }
+          function finishLoad() {
+            if (ready || !loaded || !hasSize()) return;
             restore();
             requestAnimationFrame(function () {
               restore();
@@ -220,8 +224,11 @@ object ReaderContent {
               ready = true;
               if (bridge) bridge.onReady(page, pageCount(), offset());
             });
-          });
+          }
+          document.addEventListener('DOMContentLoaded', function () { if (hasSize()) restore(); });
+          window.addEventListener('load', function () { loaded = true; finishLoad(); });
           window.addEventListener('resize', function () {
+            if (!ready) { finishLoad(); return; }
             var o = offset();
             setWidthVar();
             requestAnimationFrame(function () { show(Math.round(o * lastPage()), false); });

@@ -1,6 +1,7 @@
 package com.folio.reader
 
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.net.Uri
 import android.os.Bundle
 import android.view.KeyEvent
@@ -17,13 +18,16 @@ class MainActivity : ComponentActivity() {
     /** EPUBs handed to us by other apps ("Open with" / "Share"), waiting to be imported. */
     private val incoming = MutableStateFlow<Uri?>(null)
 
+    /** Debug builds only: a book id to open straight away (used by the CI screenshot check). */
+    private val openBook = MutableStateFlow<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         if (savedInstanceState == null) handleIntent(intent)
         setContent {
             FolioTheme {
-                FolioNavHost(incoming = incoming)
+                FolioNavHost(incoming = incoming, openBook = openBook)
             }
         }
     }
@@ -52,6 +56,8 @@ class MainActivity : ComponentActivity() {
             else -> null
         }
         if (uri != null) incoming.value = uri
+        val debuggable = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        if (debuggable) intent?.getStringExtra("open_book")?.let { openBook.value = it }
     }
 }
 
