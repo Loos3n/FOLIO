@@ -35,16 +35,16 @@ jobs:
           emulator-boot-timeout: 900
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot -camera-back none
           script: bash .github/scripts/ui-check.sh
-      # Screenshots go on a release (not an Actions artifact, which is over quota).
-      - name: Publish screenshots to the "ui-check" release
+      # Screenshots go to the "ui-check-shots" branch (Actions artifacts are over quota,
+      # and creating releases from this job has been refused with HTTP 403).
+      - name: Publish screenshots to the "ui-check-shots" branch
         if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           ls -la shots || exit 0
-          gh release delete ui-check --yes --cleanup-tag || true
-          gh release create ui-check shots/* \
-            --prerelease \
-            --target "$GITHUB_SHA" \
-            --title "UI check screenshots" \
-            --notes "Emulator screenshots of the debug build from ${GITHUB_SHA::7}."
+          cd shots
+          git init -q -b ui-check-shots
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -qm "UI check screenshots for ${GITHUB_SHA::7}"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" ui-check-shots
