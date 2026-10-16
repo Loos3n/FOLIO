@@ -24,11 +24,13 @@ jobs:
       - name: Run app on emulator and take screenshots
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 34
-          target: google_apis
+          api-level: 31
+          target: default
           arch: x86_64
           profile: pixel_6
           disable-animations: false
+          emulator-boot-timeout: 900
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot -camera-back none
           script: bash .github/scripts/ui-check.sh
       # Screenshots go on a release (not an Actions artifact, which is over quota).
       - name: Publish screenshots to the "ui-check" release
