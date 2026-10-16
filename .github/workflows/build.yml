@@ -2,6 +2,8 @@ name: Build APK
 on:
   push:
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -13,7 +15,16 @@ jobs:
           java-version: 17
       - uses: gradle/actions/setup-gradle@v4
       - run: ./gradlew assembleDebug
-      - uses: actions/upload-artifact@v4
-        with:
-          name: folio-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+      # Published as a release asset (not an Actions artifact) so it's one tap to
+      # download on a phone and doesn't count against Actions storage.
+      - name: Publish APK to the "latest-build" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk folio-debug.apk
+          gh release delete latest-build --yes --cleanup-tag || true
+          gh release create latest-build folio-debug.apk \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            --title "Folio (latest build)" \
+            --notes "Debug APK built from ${GITHUB_SHA::7} on ${GITHUB_REF_NAME}. Download folio-debug.apk on your phone and open it to install."

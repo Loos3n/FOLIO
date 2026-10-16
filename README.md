@@ -25,7 +25,7 @@ Open the folder in Android Studio (Ladybug or newer) and press **Run**, or from 
 ./gradlew assembleDebug
 ```
 
-The APK lands in `app/build/outputs/apk/debug/app-debug.apk`. If this project is pushed to GitHub, the included workflow builds the same APK on every push and attaches it to the run.
+The APK lands in `app/build/outputs/apk/debug/app-debug.apk`. On GitHub, every push builds the same APK and publishes it as `folio-debug.apk` on the **Folio (latest build)** release.
 
 ## Layout
 
