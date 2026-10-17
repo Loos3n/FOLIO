@@ -147,13 +147,18 @@ tap_menu 0
 adb exec-out screencap -p > "$OUT/12-highlighted.png"
 adb shell input tap $((W * 35 / 100)) $((H / 2)); sleep 2
 adb exec-out screencap -p > "$OUT/13-highlight-sheet.png"
+tap_label "Note"
 adb shell input text "A%snote%sabout%sthis"; sleep 1
+adb shell input keyevent KEYCODE_BACK; sleep 1   # hide the keyboard
 tap_label "Done"
+sleep 2
 long_press $((W * 55 / 100)) $((H * 62 / 100))
+adb exec-out screencap -p > "$OUT/14-define-menu.png"
 tap_menu 2
 sleep 4
 adb exec-out screencap -p > "$OUT/14-define.png"
-adb shell input keyevent KEYCODE_BACK; sleep 1
+# Close the dictionary if it opened (a stray Back would leave the book).
+[ -n "$(find_label "Search the web")" ] && { adb shell input keyevent KEYCODE_BACK; sleep 2; }
 
 # Search the whole book and open a match.
 adb shell input tap $((W / 2)) $((H / 2)); sleep 2
