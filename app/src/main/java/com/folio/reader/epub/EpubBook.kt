@@ -36,6 +36,8 @@ class EpubBook(file: File) : Closeable {
 
     val title: String
     val author: String?
+    /** BCP 47 language tag from the package metadata, e.g. "en"; used for hyphenation. */
+    val language: String?
     val manifest: Map<String, ManifestItem>
     val spine: List<ManifestItem>
     val toc: List<TocEntry>
@@ -54,6 +56,7 @@ class EpubBook(file: File) : Closeable {
             val opf = parseOpf(opfPath, opfDir)
             title = opf.title?.takeIf { it.isNotBlank() } ?: ""
             author = opf.author?.takeIf { it.isNotBlank() }
+            language = opf.language?.takeIf { it.isNotBlank() }
             manifest = opf.manifest
             itemsByPath = manifest.values.associateBy { it.path }
             spine = opf.spineIds.mapNotNull { manifest[it] }
@@ -87,6 +90,7 @@ class EpubBook(file: File) : Closeable {
     private class Opf(
         val title: String?,
         val author: String?,
+        val language: String?,
         val manifest: Map<String, ManifestItem>,
         val spineIds: List<String>,
         val ncxId: String?,
@@ -122,6 +126,7 @@ class EpubBook(file: File) : Closeable {
         val stream = open(opfPath) ?: throw EpubFormatException("This EPUB is missing its package file.")
         var title: String? = null
         var author: String? = null
+        var language: String? = null
         var ncxId: String? = null
         var coverMetaId: String? = null
         val manifest = LinkedHashMap<String, ManifestItem>()
@@ -133,6 +138,7 @@ class EpubBook(file: File) : Closeable {
                 when (p.name) {
                     "title" -> if (title == null) title = p.nextText().trim()
                     "creator" -> if (author == null) author = p.nextText().trim()
+                    "language" -> if (language == null) language = p.nextText().trim()
                     "meta" -> if (p.getAttributeValue(null, "name") == "cover") {
                         coverMetaId = p.getAttributeValue(null, "content")
                     }
@@ -152,7 +158,7 @@ class EpubBook(file: File) : Closeable {
                 }
             }
         }
-        return Opf(title, author, manifest, spine, ncxId, coverMetaId)
+        return Opf(title, author, language, manifest, spine, ncxId, coverMetaId)
     }
 
     private fun findCover(opf: Opf): String? {

@@ -39,6 +39,8 @@ data class ReaderUiState(
     /** Page within the current chapter, and how many pages it has (0 until laid out). */
     val page: Int = 0,
     val pageCount: Int = 0,
+    /** Last page (within this file) of the table-of-contents chapter being read. */
+    val sectionEnd: Int = 0,
     /** False while a chapter is being loaded and laid out. */
     val chapterReady: Boolean = false,
 )
@@ -60,6 +62,8 @@ class ReaderViewModel(private val app: FolioApp, private val bookId: String) : V
     private var weights: List<Long> = emptyList()
     private var totalWeight = 1L
     @Volatile private var chapterOffset = 0f
+    /** For the file on screen: TOC indices of the sections it contains, in reading order. */
+    private var sectionToc: List<Int> = emptyList()
     private var saveJob: Job? = null
 
     init {
@@ -93,13 +97,14 @@ class ReaderViewModel(private val app: FolioApp, private val bookId: String) : V
     }
 
     /** Where to start a chapter when the WebView asks for it. */
-    fun startFor(path: String): Pair<Float, String?> {
+    fun startFor(path: String): ChapterStart {
         val req = _request.value
         val epub = book
+        val sections = epub?.toc.orEmpty().filter { it.path == path }.map { it.fragment.orEmpty() }
         if (req != null && epub != null && epub.spine.getOrNull(req.index)?.path == path) {
-            return req.offset to req.fragment
+            return ChapterStart(req.offset, req.fragment, epub.language, sections)
         }
-        return 0f to null
+        return ChapterStart(0f, null, epub?.language, sections)
     }
 
     /** Re-issues the current position, e.g. for a freshly created WebView after rotation. */
@@ -147,9 +152,20 @@ class ReaderViewModel(private val app: FolioApp, private val bookId: String) : V
     }
 
     /** Called from the page whenever the reader lands on a page. */
-    fun onPage(page: Int, count: Int, offset: Float) {
+    fun onPage(page: Int, count: Int, offset: Float, section: Int, sectionEnd: Int) {
         chapterOffset = offset
-        _state.update { it.copy(page = page, pageCount = count, chapterReady = true) }
+        val epub = book
+        val tocIndex = sectionToc.getOrNull(section) ?: epub?.let { tocIndexBefore(it, _state.value.chapterIndex) } ?: -1
+        _state.update {
+            it.copy(
+                page = page,
+                pageCount = count,
+                sectionEnd = sectionEnd.coerceIn(page, (count - 1).coerceAtLeast(page)),
+                chapterReady = true,
+                currentTocIndex = tocIndex,
+                chapterTitle = epub?.toc?.getOrNull(tocIndex)?.title ?: it.chapterTitle,
+            )
+        }
         updateProgress()
         scheduleSave()
     }
@@ -167,11 +183,17 @@ class ReaderViewModel(private val app: FolioApp, private val bookId: String) : V
     private fun show(index: Int, offset: Float, fragment: String?) {
         val epub = book ?: return
         chapterOffset = offset
+        val path = epub.spine[index].path
+        sectionToc = epub.toc.indices.filter { epub.toc[it].path == path }
+        // A best guess until the page reports where it actually is.
+        val toc = sectionToc.firstOrNull { epub.toc[it].fragment == fragment && fragment != null }
+            ?: sectionToc.firstOrNull()?.takeIf { offset == 0f }
+            ?: tocIndexFor(epub, index)
         _state.update {
             it.copy(
                 chapterIndex = index,
-                chapterTitle = titleFor(epub, index),
-                currentTocIndex = tocIndexFor(epub, index),
+                chapterTitle = epub.toc.getOrNull(toc)?.title ?: "Chapter ${index + 1}",
+                currentTocIndex = toc,
                 chapterReady = it.chapterReady && it.chapterIndex == index,
             )
         }
@@ -195,9 +217,13 @@ class ReaderViewModel(private val app: FolioApp, private val bookId: String) : V
         return best
     }
 
-    private fun titleFor(epub: EpubBook, index: Int): String {
-        val toc = tocIndexFor(epub, index)
-        return if (toc >= 0) epub.toc[toc].title else "Chapter ${index + 1}"
+    /** The last TOC entry in a file before this one: the chapter still running at its top. */
+    private fun tocIndexBefore(epub: EpubBook, index: Int): Int {
+        var best = -1
+        for ((i, entry) in epub.toc.withIndex()) {
+            if (epub.spineIndexOf(entry.path) in 0 until index) best = i
+        }
+        return best
     }
 
     private fun scheduleSave() {

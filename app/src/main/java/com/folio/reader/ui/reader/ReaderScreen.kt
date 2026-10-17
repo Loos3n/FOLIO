@@ -308,7 +308,7 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
 
 private fun pagesLeftLabel(state: ReaderUiState): String {
     if (!state.chapterReady || state.pageCount == 0) return ""
-    return when (val left = state.pageCount - state.page - 1) {
+    return when (val left = state.sectionEnd - state.page) {
         0 -> "Last page in chapter"
         1 -> "1 page left in chapter"
         else -> "$left pages left in chapter"
@@ -354,8 +354,8 @@ private fun BookWebView(
             val assets = context.assets
             addJavascriptInterface(
                 ReaderBridge(
-                    pageChanged = { p, c, o -> view.post { vm.onPage(p, c, o) } },
-                    loaded = { p, c, o -> view.post { vm.onPage(p, c, o) } },
+                    pageChanged = { p, c, o, s, e -> view.post { vm.onPage(p, c, o, s, e) } },
+                    loaded = { p, c, o, s, e -> view.post { vm.onPage(p, c, o, s, e) } },
                     tapped = { zone -> view.post { currentOnTap.value(zone) } },
                     nextRequested = { vm.hasNextChapter().also { if (it) view.post { vm.nextChapter() } } },
                     prevRequested = { vm.hasPrevChapter().also { if (it) view.post { vm.prevChapter() } } },
@@ -487,7 +487,7 @@ private fun ReaderBottomPanel(
                     )
                     if (state.pageCount > 0) {
                         Text(
-                            "Page ${state.page + 1} of ${state.pageCount} in this chapter",
+                            pagesLeftLabel(state),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )

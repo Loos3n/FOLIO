@@ -15,6 +15,18 @@ import java.util.Locale
  * Chapters get the reader stylesheet and script injected, which lay the chapter out as
  * side-by-side pages; everything off-book is blocked so books can't phone home.
  */
+/**
+ * Where a chapter should open, plus what the page script needs to know about it: the
+ * book's language (for hyphenation) and the ids where each table-of-contents section in
+ * this file starts ("" for the top of the file), in reading order.
+ */
+data class ChapterStart(
+    val offset: Float,
+    val fragment: String?,
+    val language: String?,
+    val sections: List<String>,
+)
+
 object ReaderContent {
     const val HOST = "folio.book"
     const val ORIGIN = "https://$HOST/"
@@ -34,7 +46,7 @@ object ReaderContent {
         assets: AssetManager,
         url: Uri,
         cssFor: () -> String,
-        startFor: (path: String) -> Pair<Float, String?>,
+        startFor: (path: String) -> ChapterStart,
     ): WebResourceResponse {
         val path = pathFor(url) ?: return blocked()
         if (path == INTERNAL + "reader.js") {
@@ -49,8 +61,7 @@ object ReaderContent {
         val isDocument = mediaType == "application/xhtml+xml" || mediaType == "text/html"
         if (isDocument) {
             val bytes = book.readBytes(path) ?: return notFound()
-            val (offset, fragment) = startFor(path)
-            val html = inject(String(bytes, Charsets.UTF_8), cssFor(), offset, fragment)
+            val html = inject(String(bytes, Charsets.UTF_8), cssFor(), startFor(path))
             return WebResourceResponse(mediaType, "UTF-8", ByteArrayInputStream(html.toByteArray()))
         }
         val stream = book.open(path) ?: return notFound()
@@ -62,10 +73,15 @@ object ReaderContent {
 
     private fun notFound() = WebResourceResponse("text/plain", "UTF-8", 404, "Not found", emptyMap(), ByteArrayInputStream(ByteArray(0)))
 
-    private fun inject(html: String, css: String, offset: Float, fragment: String?): String {
+    private fun inject(html: String, css: String, start: ChapterStart): String {
         val query = buildString {
-            append("o=").append(String.format(Locale.US, "%.5f", offset))
-            if (fragment != null) append("&amp;f=").append(Uri.encode(fragment))
+            append("o=").append(String.format(Locale.US, "%.5f", start.offset))
+            if (start.fragment != null) append("&amp;f=").append(Uri.encode(start.fragment))
+            if (start.language != null) append("&amp;l=").append(Uri.encode(start.language))
+            if (start.sections.isNotEmpty()) {
+                // Each id is encoded, so the comma separator can't appear inside one.
+                append("&amp;s=").append(Uri.encode(start.sections.joinToString(",") { Uri.encode(it) }))
+            }
         }
         // Valid in both HTML and XHTML documents (no '<' or '&' inside the CSS).
         val tags = "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1, user-scalable=no\"/>" +
@@ -115,10 +131,23 @@ object ReaderContent {
             append("img,video,svg{max-width:100% !important;max-height:calc(100vh - 8px) !important;")
             append("object-fit:contain;break-inside:avoid;-webkit-column-break-inside:avoid;}")
             append("img,video{height:auto !important;}")
-            append("h1,h2,h3,h4{break-after:avoid;-webkit-column-break-after:avoid;line-height:1.25 !important;}")
+            append("h1,h2,h3,h4{break-after:avoid;-webkit-column-break-after:avoid;line-height:1.25 !important;")
+            append("-webkit-hyphens:manual;hyphens:manual;text-wrap:balance;}")
+            // Book headings get room to breathe and sit centred, like a printed chapter opening.
+            append("h1,h2,h3{text-align:center !important;text-indent:0 !important;margin:1.4em 0 1em !important;")
+            append("font-weight:600 !important;letter-spacing:0.01em;}")
+            append("h1{font-size:1.5em !important;}h2{font-size:1.3em !important;}h3{font-size:1.1em !important;}")
+            // Chapter openings start on a fresh page (the script marks which headings qualify).
+            append(".folio-break{break-before:column !important;-webkit-column-break-before:always !important;margin-top:18vh !important;}")
+            append(".folio-break-first{margin-top:18vh !important;}")
+            // Books whose paragraphs have neither indent nor spacing run together; give them
+            // the usual book treatment of indenting every paragraph after the first.
+            append(".folio-indent p{margin-top:0 !important;margin-bottom:0 !important;}")
+            append(".folio-indent p+p{text-indent:1.5em !important;}")
+            append("hr{margin:1.5em 20% !important;border:0 !important;border-top:1px solid ${fg}40 !important;height:0 !important;}")
             append("pre{white-space:pre-wrap !important;}")
             append("::selection{background:${link}55;}")
-            if (settings.justify) append("body p{text-align:justify !important;}")
+            if (settings.justify) append("body p{text-align:justify !important;text-align-last:start;}")
             settings.font.css?.let { family ->
                 append("body,body *:not(pre):not(code):not(kbd):not(samp){font-family:$family !important;}")
             }
@@ -151,6 +180,7 @@ object ReaderContent {
           });
           var start = parseFloat(params.o || '0') || 0;
           var fragment = params.f || '';
+          var sections = params.s ? params.s.split(',').map(decodeURIComponent) : [];
           var bridge = window.FolioBridge;
           var root = document.documentElement;
           var page = 0;
@@ -171,7 +201,59 @@ object ReaderContent {
             return n <= 1 ? 1 : page / (n - 1);
           }
           var leaving = false; // set once we've asked for another chapter; this page is done reporting
-          function report() { if (bridge && ready && !leaving) bridge.onPage(page, pageCount(), offset()); }
+          // Which table-of-contents section the current page is in, and its last page.
+          function pageOfElement(el) {
+            return Math.max(0, Math.floor((el.getBoundingClientRect().left + curX + 1) / width()));
+          }
+          function sectionInfo() {
+            var current = -1, end = lastPage();
+            for (var i = 0; i < sections.length; i++) {
+              var id = sections[i];
+              var el = id ? (document.getElementById(id) || document.getElementsByName(id)[0]) : null;
+              var p = id ? (el ? pageOfElement(el) : -1) : 0;
+              if (p < 0) continue;
+              if (p <= page) current = i;
+              else { end = Math.min(end, p - 1); break; }
+            }
+            return [current, end];
+          }
+          function report() {
+            if (!bridge || !ready || leaving) return;
+            var s = sectionInfo();
+            bridge.onPage(page, pageCount(), offset(), s[0], s[1]);
+          }
+
+          // One-time tidy-up of the book's own formatting, before the first layout.
+          var prepared = false;
+          function prepare() {
+            if (prepared || !document.body) return;
+            prepared = true;
+            if (params.l && !root.getAttribute('lang')) root.setAttribute('lang', params.l);
+            // Paragraphs with no first-line indent and no space between them read as one block.
+            var ps = document.body.getElementsByTagName('p'), plain = 0, sampled = 0;
+            for (var i = 0; i < ps.length && sampled < 40; i++) {
+              if ((ps[i].textContent || '').length < 60) continue;
+              sampled++;
+              var cs = getComputedStyle(ps[i]);
+              if (parseFloat(cs.textIndent) < 1 && parseFloat(cs.marginTop) + parseFloat(cs.marginBottom) < 4) plain++;
+            }
+            if (sampled > 0 && plain / sampled > 0.6) root.classList.add('folio-indent');
+            // Start each chapter heading on a new page, unless it directly follows another
+            // heading (e.g. "Part I" then "Chapter I") or nothing comes before it.
+            var heads = document.body.querySelectorAll('h1,h2');
+            var prev = null;
+            for (var j = 0; j < heads.length; j++) {
+              var h = heads[j];
+              var range = document.createRange();
+              if (prev) range.setStartAfter(prev); else range.setStart(document.body, 0);
+              range.setEndBefore(h);
+              var between = range.toString().replace(/\s+/g, '');
+              var media = range.cloneContents().querySelector && range.cloneContents().querySelector('img,svg,image');
+              if (between.length > 0 || media) h.classList.add('folio-break');
+              else if (!prev) h.classList.add('folio-break-first');
+              prev = h;
+            }
+          }
           // Pages are moved with a GPU transform rather than scrolling: smoother, and immune
           // to scroll-extent quirks at the last page.
           function setScroll(x) {
@@ -205,6 +287,7 @@ object ReaderContent {
             return Math.floor(left / width());
           }
           function restore() {
+            prepare();
             setWidthVar();
             var p = pageOfFragment();
             if (p < 0) p = Math.round(start * lastPage());
@@ -222,7 +305,8 @@ object ReaderContent {
               restore();
               fragment = '';
               ready = true;
-              if (bridge) bridge.onReady(page, pageCount(), offset());
+              var s = sectionInfo();
+              if (bridge) bridge.onReady(page, pageCount(), offset(), s[0], s[1]);
             });
           }
           document.addEventListener('DOMContentLoaded', function () { if (hasSize()) restore(); });
@@ -317,15 +401,18 @@ object ReaderContent {
 
 /** Calls from the page's JavaScript; these arrive on a WebView background thread. */
 class ReaderBridge(
-    private val pageChanged: (page: Int, count: Int, offset: Float) -> Unit,
-    private val loaded: (page: Int, count: Int, offset: Float) -> Unit,
+    /** [section] indexes the chapter's section ids (-1 before the first); [sectionEnd] is its last page. */
+    private val pageChanged: (page: Int, count: Int, offset: Float, section: Int, sectionEnd: Int) -> Unit,
+    private val loaded: (page: Int, count: Int, offset: Float, section: Int, sectionEnd: Int) -> Unit,
     private val tapped: (zone: Int) -> Unit,
     /** Return whether there is a chapter to move to. */
     private val nextRequested: () -> Boolean,
     private val prevRequested: () -> Boolean,
 ) {
-    @JavascriptInterface fun onPage(page: Int, count: Int, offset: Float) = pageChanged(page, count, offset)
-    @JavascriptInterface fun onReady(page: Int, count: Int, offset: Float) = loaded(page, count, offset)
+    @JavascriptInterface fun onPage(page: Int, count: Int, offset: Float, section: Int, sectionEnd: Int) =
+        pageChanged(page, count, offset, section, sectionEnd)
+    @JavascriptInterface fun onReady(page: Int, count: Int, offset: Float, section: Int, sectionEnd: Int) =
+        loaded(page, count, offset, section, sectionEnd)
     @JavascriptInterface fun onTap(zone: Int) = tapped(zone)
     @JavascriptInterface fun nextChapter(): Boolean = nextRequested()
     @JavascriptInterface fun prevChapter(): Boolean = prevRequested()

@@ -28,7 +28,7 @@ data class ReaderSettings(
     /** null = follow the system light/dark setting. */
     val theme: ReaderTheme? = null,
     val font: ReaderFont = ReaderFont.Literata,
-    val justify: Boolean = true,
+    val justify: Boolean = false,
     /** Volume up/down turn pages while reading. */
     val volumeKeys: Boolean = true,
 ) {
