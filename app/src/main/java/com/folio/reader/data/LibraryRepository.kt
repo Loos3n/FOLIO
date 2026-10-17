@@ -20,6 +20,40 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
 
+/** A saved page: which chapter file, where in it (0..1), and enough text to recognise it. */
+data class Bookmark(
+    val id: String,
+    val chapterIndex: Int,
+    val chapterOffset: Float,
+    /** Whole-book progress at the bookmark, 0..1. */
+    val progress: Float,
+    val chapterTitle: String,
+    val snippet: String,
+    val createdAt: Long,
+) {
+    fun toJson(): JSONObject = JSONObject()
+        .put("id", id)
+        .put("chapterIndex", chapterIndex)
+        .put("chapterOffset", chapterOffset.toDouble())
+        .put("bookmarks", JSONArray().apply { bookmarks.forEach { put(it.toJson()) } })
+        .put("progress", progress.toDouble())
+        .put("chapterTitle", chapterTitle)
+        .put("snippet", snippet)
+        .put("createdAt", createdAt)
+
+    companion object {
+        fun fromJson(o: JSONObject) = Bookmark(
+            id = o.optString("id").ifEmpty { UUID.randomUUID().toString() },
+            chapterIndex = o.optInt("chapterIndex"),
+            chapterOffset = o.optDouble("chapterOffset", 0.0).toFloat(),
+            progress = o.optDouble("progress", 0.0).toFloat(),
+            chapterTitle = o.optString("chapterTitle"),
+            snippet = o.optString("snippet"),
+            createdAt = o.optLong("createdAt"),
+        )
+    }
+}
+
 data class Book(
     val id: String,
     val title: String,
@@ -33,6 +67,8 @@ data class Book(
     val chapterIndex: Int = 0,
     /** Scroll position inside the current chapter, 0..1. */
     val chapterOffset: Float = 0f,
+    /** Saved pages, in reading order. */
+    val bookmarks: List<Bookmark> = emptyList(),
 ) {
     fun toJson(): JSONObject = JSONObject()
         .put("id", id)
@@ -58,6 +94,9 @@ data class Book(
             progress = o.optDouble("progress", 0.0).toFloat(),
             chapterIndex = o.optInt("chapterIndex"),
             chapterOffset = o.optDouble("chapterOffset", 0.0).toFloat(),
+            bookmarks = o.optJSONArray("bookmarks")?.let { a ->
+                List(a.length()) { Bookmark.fromJson(a.getJSONObject(it)) }
+            }.orEmpty(),
         )
     }
 }
@@ -124,6 +163,16 @@ class LibraryRepository(private val context: Context) {
 
     suspend fun saveProgress(id: String, chapterIndex: Int, chapterOffset: Float, progress: Float) =
         update(id) { it.copy(chapterIndex = chapterIndex, chapterOffset = chapterOffset, progress = progress) }
+
+    suspend fun addBookmark(id: String, bookmark: Bookmark) = update(id) { book ->
+        book.copy(
+            bookmarks = (book.bookmarks + bookmark)
+                .sortedWith(compareBy<Bookmark>({ it.chapterIndex }, { it.chapterOffset })),
+        )
+    }
+
+    suspend fun removeBookmark(id: String, bookmarkId: String) =
+        update(id) { book -> book.copy(bookmarks = book.bookmarks.filterNot { it.id == bookmarkId }) }
 
     suspend fun resetProgress(id: String) =
         update(id) { it.copy(chapterIndex = 0, chapterOffset = 0f, progress = 0f, lastOpenedAt = 0L) }

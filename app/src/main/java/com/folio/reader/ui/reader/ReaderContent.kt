@@ -147,6 +147,9 @@ object ReaderContent {
             append("hr{margin:1.5em 20% !important;border:0 !important;border-top:1px solid ${fg}40 !important;height:0 !important;}")
             append("pre{white-space:pre-wrap !important;}")
             append("::selection{background:${link}55;}")
+            // Read-aloud: the sentence being spoken, and the word within it.
+            append("::highlight(folio-sentence){background-color:${link}26;}")
+            append("::highlight(folio-word){background-color:${link}66;}")
             // .folio-p marks the book's ordinary body paragraphs (not centred or right-aligned ones),
             // so the justify setting applies both ways without flattening title pages.
             if (settings.justify) append(".folio-p{text-align:justify !important;text-align-last:start;}")
@@ -386,16 +389,157 @@ object ReaderContent {
             if (bridge) bridge.onTap(x < 0.3 ? -1 : (x > 0.7 ? 1 : 0));
           });
 
+          // ---- Text on the page, for bookmarks and read-aloud.
+          var blockCache = new WeakMap();
+          function isBlock(el) {
+            var v = blockCache.get(el);
+            if (v === undefined) {
+              var d = getComputedStyle(el).display;
+              v = !(d === 'inline' || d === 'contents' || d.indexOf('inline') === 0 || d === 'ruby' || d.indexOf('ruby') === 0);
+              blockCache.set(el, v);
+            }
+            return v;
+          }
+          function blockOf(n) {
+            for (var e = n.parentNode; e && e !== document.body; e = e.parentNode) if (e.nodeType === 1 && isBlock(e)) return e;
+            return document.body;
+          }
+          function textWalker(from) {
+            var w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+              acceptNode: function (n) {
+                var t = n.parentNode ? n.parentNode.nodeName.toLowerCase() : '';
+                return (t === 'script' || t === 'style' || t === 'rt' || t === 'title') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+              }
+            });
+            if (from) w.currentNode = from;
+            return w;
+          }
+          // The first word of text on the page being shown. (Found from layout boxes rather
+          // than hit-testing, which ignores the page transform in some WebViews.)
+          function pageOfRect(r) { return Math.floor((r.left + curX + 1) / width()); }
+          function charPage(n, o) {
+            var rg = document.createRange();
+            rg.setStart(n, o); rg.setEnd(n, Math.min(o + 1, n.nodeValue.length));
+            var rs = rg.getClientRects();
+            return rs.length ? pageOfRect(rs[0]) : -1;
+          }
+          function textStart() {
+            var w = textWalker(null), n, rg = document.createRange();
+            while ((n = w.nextNode())) {
+              var v = n.nodeValue;
+              if (!v.trim()) continue;
+              rg.selectNodeContents(n);
+              var rects = rg.getClientRects();
+              if (!rects.length || pageOfRect(rects[rects.length - 1]) < page) continue;
+              var o = 0;
+              if (pageOfRect(rects[0]) < page) {
+                // This node starts on an earlier page: find its first character on this one.
+                var lo = 0, hi = v.length - 1;
+                while (lo < hi) {
+                  var mid = (lo + hi) >> 1, cp = charPage(n, mid);
+                  if (cp >= page) hi = mid; else lo = mid + 1;
+                }
+                o = lo;
+                while (o > 0 && !/\s/.test(v.charAt(o - 1))) o--;
+                if (charPage(n, o) < page) { while (o < v.length && !/\s/.test(v.charAt(o))) o++; while (o < v.length && /\s/.test(v.charAt(o))) o++; }
+              }
+              return { node: n, offset: o };
+            }
+            return null;
+          }
+          // Splits the text from a starting point to the end of the file into sentences,
+          // remembering which text nodes each one came from so spoken words can be found again.
+          function buildChunks(start) {
+            var chunks = [], cur = null, block = null, n = start.node, first = true;
+            var w = textWalker(start.node);
+            function flush() { if (cur && cur.text.trim()) chunks.push(cur); cur = null; }
+            while (n) {
+              var b = blockOf(n);
+              if (b !== block) { flush(); block = b; }
+              else if (n.previousSibling && n.previousSibling.nodeName.toLowerCase() === 'br') flush();
+              var v = n.nodeValue, i = first ? start.offset : 0;
+              first = false;
+              while (i < v.length) {
+                if (!cur) cur = { text: '', segs: [] };
+                var re = /[.!?\u2026]+["'\u201D\u2019)\]]*(\s+|$)/g;
+                re.lastIndex = i;
+                var m = re.exec(v);
+                var end = m ? m.index + m[0].length : v.length;
+                cur.segs.push({ node: n, start: i, end: end, at: cur.text.length });
+                cur.text += v.slice(i, end);
+                i = end;
+                if (m || cur.text.length > 600) flush();
+              }
+              n = w.nextNode();
+            }
+            flush();
+            return chunks;
+          }
+          function rangeIn(chunk, s, e) {
+            var r = document.createRange(), started = false;
+            for (var k = 0; k < chunk.segs.length; k++) {
+              var g = chunk.segs[k], len = g.end - g.start;
+              if (!started && s < g.at + len) { r.setStart(g.node, g.start + Math.max(0, s - g.at)); started = true; }
+              if (started && e <= g.at + len) { r.setEnd(g.node, g.start + Math.max(0, e - g.at)); return r; }
+            }
+            if (!started) return null;
+            var last = chunk.segs[chunk.segs.length - 1];
+            r.setEnd(last.node, last.end);
+            return r;
+          }
+          var tts = null;
+          function highlight(name, range) {
+            if (!(window.CSS && CSS.highlights && window.Highlight)) return;
+            if (range) CSS.highlights.set(name, new Highlight(range)); else CSS.highlights.delete(name);
+          }
+          function userTurned() { if (tts && bridge && bridge.onManualTurn) bridge.onManualTurn(); }
+
           var folio = window.folio = {
             next: function () {
               if (leaving) return;
               if (page >= lastPage()) { if (anim) { cancelAnimationFrame(anim); anim = null; } setScroll(page * width()); if (bridge && bridge.nextChapter()) leaving = true; }
-              else show(page + 1, true);
+              else { show(page + 1, true); userTurned(); }
             },
             prev: function () {
               if (leaving) return;
               if (page <= 0) { if (anim) { cancelAnimationFrame(anim); anim = null; } setScroll(0); if (bridge && bridge.prevChapter()) leaving = true; }
-              else show(page - 1, true);
+              else { show(page - 1, true); userTurned(); }
+            },
+            // A short excerpt from the top of the page, to label a bookmark.
+            snippet: function () {
+              var st = textStart();
+              if (!st) return '';
+              var out = '', w = textWalker(st.node), n = st.node, o = st.offset;
+              while (n && out.length < 200) { out += n.nodeValue.slice(o) + ' '; o = 0; n = w.nextNode(); }
+              out = out.replace(/\s+/g, ' ').trim();
+              return out.length > 140 ? out.slice(0, 140).replace(/\s+\S*$/, '') + '\u2026' : out;
+            },
+            // Read-aloud: prepares sentences from the top of this page and returns their text.
+            ttsStart: function () {
+              if (!ready || leaving) return null; // not laid out yet; the app retries once it is
+              var st = textStart();
+              tts = st ? buildChunks(st) : [];
+              return tts.map(function (c) { return c.text; });
+            },
+            // Highlights sentence i (and the word from s to e in it), turning the page to follow.
+            ttsMark: function (i, s, e) {
+              var c = tts && tts[i];
+              if (!c) return;
+              var sentence = rangeIn(c, 0, c.text.length);
+              var word = s >= 0 && e > s ? rangeIn(c, s, e) : null;
+              highlight('folio-sentence', sentence);
+              highlight('folio-word', word);
+              var target = word || sentence;
+              var rects = target ? target.getClientRects() : [];
+              if (rects.length && !anim && !leaving) {
+                var p = Math.floor((rects[0].left + curX + 1) / width());
+                if (p !== page) show(p, true);
+              }
+            },
+            ttsStop: function () {
+              tts = null;
+              highlight('folio-sentence', null);
+              highlight('folio-word', null);
             },
             setStyle: function (css) {
               var o = offset();
@@ -429,6 +573,8 @@ class ReaderBridge(
     /** Return whether there is a chapter to move to. */
     private val nextRequested: () -> Boolean,
     private val prevRequested: () -> Boolean,
+    /** The reader turned the page themselves (only reported while reading aloud). */
+    private val manualTurn: () -> Unit = {},
 ) {
     @JavascriptInterface fun onPage(page: Int, count: Int, offset: Float, section: Int, sectionEnd: Int) =
         pageChanged(page, count, offset, section, sectionEnd)
@@ -437,4 +583,5 @@ class ReaderBridge(
     @JavascriptInterface fun onTap(zone: Int) = tapped(zone)
     @JavascriptInterface fun nextChapter(): Boolean = nextRequested()
     @JavascriptInterface fun prevChapter(): Boolean = prevRequested()
+    @JavascriptInterface fun onManualTurn() = manualTurn()
 }

@@ -3,6 +3,7 @@ package com.folio.reader.ui.reader
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.folio.reader.FolioApp
+import com.folio.reader.data.Bookmark
 import com.folio.reader.data.ReaderSettings
 import com.folio.reader.epub.EpubBook
 import com.folio.reader.epub.TocEntry
@@ -10,11 +11,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.UUID
 
 /** One request to show a chapter. [token] makes repeated requests for the same place distinct. */
 data class ChapterRequest(
@@ -52,6 +57,10 @@ class ReaderViewModel(private val app: FolioApp, private val bookId: String) : V
 
     private val _state = MutableStateFlow(ReaderUiState())
     val state: StateFlow<ReaderUiState> = _state.asStateFlow()
+
+    val bookmarks: StateFlow<List<Bookmark>> = library.books
+        .map { books -> books.firstOrNull { it.id == bookId }?.bookmarks.orEmpty() }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     private val _request = MutableStateFlow<ChapterRequest?>(null)
     val request: StateFlow<ChapterRequest?> = _request.asStateFlow()
@@ -170,6 +179,39 @@ class ReaderViewModel(private val app: FolioApp, private val bookId: String) : V
         scheduleSave()
     }
 
+    /** The bookmark on the page being shown, if there is one. */
+    fun bookmarkHere(marks: List<Bookmark>, s: ReaderUiState): Bookmark? {
+        if (!s.chapterReady || s.pageCount == 0) return null
+        val last = (s.pageCount - 1).coerceAtLeast(1)
+        return marks.firstOrNull { it.chapterIndex == s.chapterIndex && Math.round(it.chapterOffset * last) == s.page.coerceAtMost(last) }
+    }
+
+    fun addBookmark(snippet: String) {
+        val s = _state.value
+        if (book == null || !s.chapterReady) return
+        val mark = Bookmark(
+            id = UUID.randomUUID().toString(),
+            chapterIndex = s.chapterIndex,
+            chapterOffset = chapterOffset,
+            progress = s.progress,
+            chapterTitle = s.chapterTitle,
+            snippet = snippet,
+            createdAt = System.currentTimeMillis(),
+        )
+        app.appScope.launch { library.addBookmark(bookId, mark) }
+    }
+
+    fun removeBookmark(mark: Bookmark) {
+        app.appScope.launch { library.removeBookmark(bookId, mark.id) }
+    }
+
+    fun openBookmark(mark: Bookmark) {
+        val epub = book ?: return
+        show(mark.chapterIndex.coerceIn(0, epub.spine.lastIndex), mark.chapterOffset, null)
+    }
+
+    val language: String? get() = book?.language
+
     fun updateSettings(transform: (ReaderSettings) -> ReaderSettings) = app.settings.update(transform)
 
     fun currentOffset() = chapterOffset
@@ -194,7 +236,8 @@ class ReaderViewModel(private val app: FolioApp, private val bookId: String) : V
                 chapterIndex = index,
                 chapterTitle = epub.toc.getOrNull(toc)?.title ?: "Chapter ${index + 1}",
                 currentTocIndex = toc,
-                chapterReady = it.chapterReady && it.chapterIndex == index,
+                // The page reloads even within the same file; it reports ready again once laid out.
+                chapterReady = false,
             )
         }
         updateProgress()

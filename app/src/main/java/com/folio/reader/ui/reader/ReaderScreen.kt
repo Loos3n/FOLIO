@@ -59,12 +59,15 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -84,6 +87,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -110,6 +114,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.folio.reader.FolioApp
 import com.folio.reader.PageKeys
+import com.folio.reader.data.Bookmark
 import com.folio.reader.data.ReaderFont
 import com.folio.reader.data.ReaderSettings
 import com.folio.reader.data.ReaderTheme
@@ -117,7 +122,10 @@ import com.folio.reader.epub.TocEntry
 import com.folio.reader.ui.theme.ChromeStyle
 import com.folio.reader.ui.theme.FolioFonts
 import com.folio.reader.ui.theme.FolioTheme
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import org.json.JSONArray
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -154,6 +162,89 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
         }
     }
     var webView by remember { mutableStateOf<WebView?>(null) }
+    val bookmarks by vm.bookmarks.collectAsStateWithLifecycle()
+    val bookmarkHere = vm.bookmarkHere(bookmarks, state)
+    var tocTab by remember { mutableStateOf(0) }
+
+    fun toggleBookmark() {
+        val existing = bookmarkHere
+        if (existing != null) {
+            vm.removeBookmark(existing)
+        } else {
+            webView?.evaluateJavascript("window.folio ? folio.snippet() : ''") { json ->
+                vm.addBookmark(runCatching { JSONArray("[$json]").getString(0) }.getOrDefault(""))
+            }
+        }
+    }
+
+    // Read-aloud: the phone's voice reads from the top of the page, highlighting as it goes.
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val readAloud = remember {
+        lateinit var self: ReadAloud
+        ReadAloud(
+            context,
+            onSentence = { i -> webView?.evaluateJavascript("window.folio && folio.ttsMark($i,-1,-1)", null) },
+            onWord = { i, start, end -> webView?.evaluateJavascript("window.folio && folio.ttsMark($i,$start,$end)", null) },
+            onFinished = { if (vm.hasNextChapter()) vm.nextChapter() else self.stop() },
+        ).also { self = it }
+    }
+    DisposableEffect(readAloud) { onDispose { readAloud.shutdown() } }
+    var readingRequest by remember { mutableStateOf<ChapterRequest?>(null) }
+    var pausedAt by remember { mutableStateOf<Pair<ChapterRequest?, Int>?>(null) }
+    var restartJob by remember { mutableStateOf<Job?>(null) }
+
+    fun startReading() {
+        val wv = webView ?: return
+        readingRequest = request
+        readAloud.setLanguage(vm.language)
+        wv.evaluateJavascript("window.folio ? folio.ttsStart() : null") { json ->
+            if (json == null || json == "null") {
+                // The page isn't ready yet; start as soon as it reports in.
+                readingRequest = null
+                readAloud.standBy()
+                return@evaluateJavascript
+            }
+            val texts = runCatching {
+                val a = JSONArray(json)
+                List(a.length()) { a.getString(it) }
+            }.getOrDefault(emptyList())
+            readAloud.play(texts)
+        }
+    }
+
+    fun stopReading() {
+        restartJob?.cancel()
+        readAloud.stop()
+        webView?.evaluateJavascript("window.folio && folio.ttsStop()", null)
+    }
+
+    fun togglePause() {
+        if (readAloud.paused) {
+            // Carry on where it stopped, unless the reader has moved to another page since.
+            if (pausedAt == (request to state.page)) readAloud.resume() else startReading()
+        } else {
+            pausedAt = request to state.page
+            readAloud.pause()
+        }
+    }
+
+    // A new chapter (or a jump) while reading: pick up from the top of the new page.
+    LaunchedEffect(request, state.chapterReady) {
+        if (readAloud.active && !readAloud.paused && state.chapterReady && request != null && request !== readingRequest) {
+            startReading()
+        }
+    }
+
+    val onManualTurn: () -> Unit = {
+        if (readAloud.active && !readAloud.paused) {
+            restartJob?.cancel()
+            restartJob = scope.launch {
+                delay(350) // let the page settle
+                startReading()
+            }
+        }
+    }
 
     fun turn(forward: Boolean) {
         webView?.evaluateJavascript(if (forward) "window.folio && folio.next()" else "window.folio && folio.prev()", null)
@@ -197,6 +288,7 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
                     prefs = settings,
                     theme = theme,
                     onTap = onTap,
+                    onManualTurn = onManualTurn,
                     onCreated = { webView = it },
                     modifier = Modifier
                         .fillMaxSize()
@@ -259,13 +351,59 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
                 }
             }
 
+            // A ribbon on bookmarked pages.
+            if (bookmarkHere != null && !state.loading && state.error == null) {
+                Icon(
+                    ReaderIcons.Bookmark,
+                    contentDescription = "This page is bookmarked",
+                    tint = Color(theme.link),
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .windowInsetsPadding(WindowInsets.systemBarsIgnoringVisibility.only(WindowInsetsSides.Top))
+                        .padding(end = 20.dp)
+                        .size(width = 22.dp, height = 30.dp),
+                )
+            }
+
+            AnimatedVisibility(
+                visible = readAloud.active && !controlsVisible,
+                enter = slideInVertically { it } + fadeIn(),
+                exit = slideOutVertically { it } + fadeOut(),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .windowInsetsPadding(WindowInsets.systemBarsIgnoringVisibility.only(WindowInsetsSides.Bottom))
+                    .padding(bottom = 36.dp),
+            ) {
+                ReadAloudBar(
+                    paused = readAloud.paused,
+                    rate = readAloud.rate,
+                    onPause = ::togglePause,
+                    onRate = {
+                        val rates = listOf(0.8f, 1f, 1.25f, 1.5f)
+                        readAloud.rate = rates[(rates.indexOfFirst { abs(it - readAloud.rate) < 0.01f } + 1) % rates.size]
+                    },
+                    onStop = ::stopReading,
+                )
+            }
+
             AnimatedVisibility(
                 visible = controlsVisible && state.error == null,
                 enter = slideInVertically { -it } + fadeIn(),
                 exit = slideOutVertically { -it } + fadeOut(),
                 modifier = Modifier.align(Alignment.TopCenter),
             ) {
-                ReaderTopBar(title = state.title, onBack = onBack)
+                ReaderTopBar(
+                    title = state.title,
+                    onBack = onBack,
+                    bookmarked = bookmarkHere != null,
+                    onBookmark = ::toggleBookmark,
+                    listening = readAloud.active,
+                    onListen = {
+                        if (readAloud.active) stopReading() else startReading()
+                        controlsVisible = false
+                    },
+                    canListen = readAloud.available,
+                )
             }
 
             AnimatedVisibility(
@@ -288,11 +426,20 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
         if (showToc) {
             TocSheet(
                 state = state,
+                bookmarks = bookmarks,
+                tab = tocTab,
+                onTab = { tocTab = it },
                 onSelect = { entry ->
                     vm.openToc(entry)
                     showToc = false
                     controlsVisible = false
                 },
+                onOpenBookmark = { mark ->
+                    vm.openBookmark(mark)
+                    showToc = false
+                    controlsVisible = false
+                },
+                onDeleteBookmark = vm::removeBookmark,
                 onDismiss = { showToc = false },
             )
         }
@@ -323,10 +470,12 @@ private fun BookWebView(
     prefs: ReaderSettings,
     theme: ReaderTheme,
     onTap: (Int) -> Unit,
+    onManualTurn: () -> Unit,
     onCreated: (WebView?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+    val currentOnManualTurn = rememberUpdatedState(onManualTurn)
     val css = remember(prefs, theme) { ReaderContent.css(prefs, theme) }
     val currentCss = rememberUpdatedState(css)
     val currentOnTap = rememberUpdatedState(onTap)
@@ -359,6 +508,7 @@ private fun BookWebView(
                     tapped = { zone -> view.post { currentOnTap.value(zone) } },
                     nextRequested = { vm.hasNextChapter().also { if (it) view.post { vm.nextChapter() } } },
                     prevRequested = { vm.hasPrevChapter().also { if (it) view.post { vm.prevChapter() } } },
+                    manualTurn = { view.post { currentOnManualTurn.value() } },
                 ),
                 "FolioBridge",
             )
@@ -424,7 +574,15 @@ private fun BookWebView(
 }
 
 @Composable
-private fun ReaderTopBar(title: String, onBack: () -> Unit) {
+private fun ReaderTopBar(
+    title: String,
+    onBack: () -> Unit,
+    bookmarked: Boolean,
+    onBookmark: () -> Unit,
+    listening: Boolean,
+    onListen: () -> Unit,
+    canListen: Boolean,
+) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainer,
         shape = RoundedCornerShape(bottomStart = 28.dp, bottomEnd = 28.dp),
@@ -447,8 +605,67 @@ private fun ReaderTopBar(title: String, onBack: () -> Unit) {
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
                     .weight(1f)
-                    .padding(end = 16.dp),
+                    .padding(end = 4.dp),
             )
+            if (canListen) {
+                IconButton(onClick = onListen) {
+                    Icon(
+                        if (listening) Icons.Filled.Close else ReaderIcons.Headphones,
+                        contentDescription = if (listening) "Stop reading aloud" else "Read aloud",
+                    )
+                }
+            }
+            IconButton(onClick = onBookmark) {
+                Icon(
+                    if (bookmarked) ReaderIcons.Bookmark else ReaderIcons.BookmarkBorder,
+                    contentDescription = if (bookmarked) "Remove bookmark" else "Bookmark this page",
+                    tint = if (bookmarked) MaterialTheme.colorScheme.primary else LocalContentColor.current,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReadAloudBar(
+    paused: Boolean,
+    rate: Float,
+    onPause: () -> Unit,
+    onRate: () -> Unit,
+    onStop: () -> Unit,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = CircleShape,
+        shadowElevation = 6.dp,
+    ) {
+        Row(Modifier.padding(horizontal = 6.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            FilledTonalIconButton(onClick = onPause) {
+                Icon(
+                    if (paused) ReaderIcons.Play else ReaderIcons.Pause,
+                    contentDescription = if (paused) "Resume reading" else "Pause reading",
+                )
+            }
+            Text(
+                if (paused) "Paused" else "Reading aloud",
+                style = MaterialTheme.typography.labelLarge,
+                modifier = Modifier.padding(horizontal = 10.dp),
+            )
+            Surface(
+                onClick = onRate,
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+            ) {
+                Text(
+                    (if (rate % 1f == 0f) rate.toInt().toString() else rate.toString()) + "\u00D7",
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                )
+            }
+            IconButton(onClick = onStop) {
+                Icon(Icons.Filled.Close, contentDescription = "Stop reading aloud")
+            }
         }
     }
 }
@@ -542,56 +759,156 @@ private fun ReaderBottomPanel(
 @Composable
 private fun TocSheet(
     state: ReaderUiState,
+    bookmarks: List<Bookmark>,
+    tab: Int,
+    onTab: (Int) -> Unit,
     onSelect: (TocEntry) -> Unit,
+    onOpenBookmark: (Bookmark) -> Unit,
+    onDeleteBookmark: (Bookmark) -> Unit,
     onDismiss: () -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState()) {
-        Text(
-            "Contents",
-            style = MaterialTheme.typography.headlineSmall,
-            modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 12.dp),
-        )
-        val listState = rememberLazyListState(initialFirstVisibleItemIndex = (state.currentTocIndex - 2).coerceAtLeast(0))
-        LazyColumn(state = listState, modifier = Modifier.padding(horizontal = 12.dp)) {
-            itemsIndexed(state.toc) { index, entry ->
-                val selected = index == state.currentTocIndex
-                Surface(
-                    onClick = { onSelect(entry) },
-                    shape = RoundedCornerShape(16.dp),
-                    color = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
-                    contentColor = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Row(
-                        Modifier.padding(
-                            start = (16 + entry.level.coerceAtMost(4) * 16).dp,
-                            end = 16.dp,
-                            top = 14.dp,
-                            bottom = 14.dp,
-                        ),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        if (selected) {
-                            Box(
-                                Modifier
-                                    .size(8.dp)
-                                    .clip(CircleShape)
-                                    .background(MaterialTheme.colorScheme.primary),
-                            )
-                            Spacer(Modifier.width(12.dp))
+        SingleChoiceSegmentedButtonRow(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = 24.dp, end = 24.dp, bottom = 12.dp),
+        ) {
+            listOf("Contents", "Bookmarks").forEachIndexed { i, label ->
+                SegmentedButton(
+                    selected = tab == i,
+                    onClick = { onTab(i) },
+                    shape = SegmentedButtonDefaults.itemShape(i, 2),
+                ) { Text(if (i == 1 && bookmarks.isNotEmpty()) "$label (${bookmarks.size})" else label) }
+            }
+        }
+        when (tab) {
+            0 -> {
+                val listState = rememberLazyListState(initialFirstVisibleItemIndex = (state.currentTocIndex - 2).coerceAtLeast(0))
+                LazyColumn(state = listState, modifier = Modifier.padding(horizontal = 12.dp)) {
+                    itemsIndexed(state.toc) { index, entry ->
+                        val selected = index == state.currentTocIndex
+                        Surface(
+                            onClick = { onSelect(entry) },
+                            shape = RoundedCornerShape(16.dp),
+                            color = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                            contentColor = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Row(
+                                Modifier.padding(
+                                    start = (16 + entry.level.coerceAtMost(4) * 16).dp,
+                                    end = 16.dp,
+                                    top = 14.dp,
+                                    bottom = 14.dp,
+                                ),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                if (selected) {
+                                    Box(
+                                        Modifier
+                                            .size(8.dp)
+                                            .clip(CircleShape)
+                                            .background(MaterialTheme.colorScheme.primary),
+                                    )
+                                    Spacer(Modifier.width(12.dp))
+                                }
+                                Text(
+                                    entry.title,
+                                    style = if (entry.level == 0) MaterialTheme.typography.bodyLarge else MaterialTheme.typography.bodyMedium,
+                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
                         }
+                    }
+                    item { Spacer(Modifier.height(24.dp)) }
+                }
+            }
+            else -> BookmarkList(bookmarks, onOpenBookmark, onDeleteBookmark)
+        }
+    }
+}
+
+@Composable
+private fun BookmarkList(
+    bookmarks: List<Bookmark>,
+    onOpen: (Bookmark) -> Unit,
+    onDelete: (Bookmark) -> Unit,
+) {
+    if (bookmarks.isEmpty()) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 32.dp, vertical = 40.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Icon(
+                ReaderIcons.BookmarkBorder,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(40.dp),
+            )
+            Spacer(Modifier.height(12.dp))
+            Text("No bookmarks yet", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Tap the middle of a page, then the bookmark at the top to save your place.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
+        }
+        return
+    }
+    LazyColumn(Modifier.padding(horizontal = 12.dp)) {
+        itemsIndexed(bookmarks, key = { _, b -> b.id }) { _, mark ->
+            Surface(
+                onClick = { onOpen(mark) },
+                shape = RoundedCornerShape(16.dp),
+                color = Color.Transparent,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    Modifier.padding(start = 16.dp, top = 12.dp, bottom = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        ReaderIcons.Bookmark,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp),
+                    )
+                    Spacer(Modifier.width(14.dp))
+                    Column(Modifier.weight(1f)) {
                         Text(
-                            entry.title,
-                            style = if (entry.level == 0) MaterialTheme.typography.bodyLarge else MaterialTheme.typography.bodyMedium,
-                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                            maxLines = 2,
+                            "${mark.chapterTitle.ifBlank { "Bookmark" }} \u00B7 ${(mark.progress * 100).roundToInt()}%",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
+                        )
+                        if (mark.snippet.isNotBlank()) {
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                mark.snippet,
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                    IconButton(onClick = { onDelete(mark) }) {
+                        Icon(
+                            Icons.Filled.Delete,
+                            contentDescription = "Delete bookmark",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }
             }
-            item { Spacer(Modifier.height(24.dp)) }
         }
+        item { Spacer(Modifier.height(24.dp)) }
     }
 }
 
