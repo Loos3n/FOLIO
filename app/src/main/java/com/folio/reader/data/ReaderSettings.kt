@@ -30,7 +30,7 @@ data class ReaderSettings(
     val font: ReaderFont = ReaderFont.Literata,
     val justify: Boolean = false,
     /** Volume up/down turn pages while reading. */
-    val volumeKeys: Boolean = true,
+    val volumeKeys: Boolean = false,
 ) {
     fun resolvedTheme(systemDark: Boolean): ReaderTheme =
         theme ?: if (systemDark) ReaderTheme.Dark else ReaderTheme.Light
@@ -52,7 +52,7 @@ class SettingsRepository(context: Context) {
             .putString("theme", next.theme?.name)
             .putString("font", next.font.name)
             .putBoolean("justify", next.justify)
-            .putBoolean("volumeKeys", next.volumeKeys)
+            .putBoolean("volumeKeysTurnPages", next.volumeKeys)
             .apply()
     }
 
@@ -65,7 +65,7 @@ class SettingsRepository(context: Context) {
             theme = prefs.getString("theme", null)?.let { n -> ReaderTheme.entries.firstOrNull { it.name == n } },
             font = prefs.getString("font", null)?.let { n -> ReaderFont.entries.firstOrNull { it.name == n } } ?: d.font,
             justify = prefs.getBoolean("justify", d.justify),
-            volumeKeys = prefs.getBoolean("volumeKeys", d.volumeKeys),
+            volumeKeys = prefs.getBoolean("volumeKeysTurnPages", d.volumeKeys),
         )
     }
 }

@@ -264,7 +264,8 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
     val sheetsOpen by rememberUpdatedState(showToc || showSettings)
     DisposableEffect(Unit) {
         PageKeys.handler = PageKeys.Handler(
-            enabled = { currentSettings.volumeKeys && !sheetsOpen },
+            // Never while reading aloud: then the buttons should set the volume.
+            enabled = { currentSettings.volumeKeys && !sheetsOpen && !readAloud.active },
             turn = { forward -> turn(forward) },
         )
         onDispose { PageKeys.handler = null }
