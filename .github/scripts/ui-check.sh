@@ -130,18 +130,27 @@ adb exec-out screencap -p > "$OUT/10-bookmarks-list.png"
 adb shell input keyevent KEYCODE_BACK; sleep 1
 
 # Highlights, notes and the dictionary: press and hold a word, then use the menu.
+pip install --quiet pillow || true
+# Taps item N (0 = Highlight, 1 = Note, 2 = Define, 3 = Copy) of the selection menu.
+tap_menu() {
+  adb exec-out screencap -p > menu.png
+  local xy
+  xy=$(python3 .github/scripts/menu-item.py menu.png "$1")
+  if [ -n "$xy" ]; then adb shell input tap $xy; else echo "no selection menu item $1" | tee -a "$OUT/tts.txt"; fi
+  sleep 2
+}
 long_press() { adb shell input swipe "$1" "$2" "$1" "$2" 1200; sleep 2; }
 adb shell input tap $((W / 2)) $((H / 2)); sleep 1   # hide the controls
 long_press $((W * 35 / 100)) $((H / 2))
 adb exec-out screencap -p > "$OUT/11-selection-menu.png"
-tap_label "Highlight"
+tap_menu 0
 adb exec-out screencap -p > "$OUT/12-highlighted.png"
 adb shell input tap $((W * 35 / 100)) $((H / 2)); sleep 2
 adb exec-out screencap -p > "$OUT/13-highlight-sheet.png"
 adb shell input text "A%snote%sabout%sthis"; sleep 1
 tap_label "Done"
 long_press $((W * 55 / 100)) $((H * 62 / 100))
-tap_label "Define"
+tap_menu 2
 sleep 4
 adb exec-out screencap -p > "$OUT/14-define.png"
 adb shell input keyevent KEYCODE_BACK; sleep 1
