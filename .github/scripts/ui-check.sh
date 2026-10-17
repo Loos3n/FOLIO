@@ -81,14 +81,15 @@ tap_label() {
   adb shell uiautomator dump /sdcard/ui.xml > /dev/null 2>&1 || true
   adb shell cat /sdcard/ui.xml > ui.xml 2>/dev/null || true
   local xy
-  xy=$(python3 - "$1" <<'PY'
-import re, sys
-label = sys.argv[1]
+  xy=$(python3 - "$1" "${2:-}" <<'PY'
+import html, re, sys
+label = sys.argv[1].encode().decode('unicode_escape')
+contains = sys.argv[2] == 'contains'
 xml = open('ui.xml', encoding='utf-8', errors='ignore').read()
 for node in re.findall(r'<node [^>]*>', xml):
-    desc = re.search(r'content-desc="([^"]*)"', node).group(1)
-    text = re.search(r' text="([^"]*)"', node).group(1)
-    if desc.startswith(label) or text.startswith(label):
+    desc = html.unescape(re.search(r'content-desc="([^"]*)"', node).group(1))
+    text = html.unescape(re.search(r' text="([^"]*)"', node).group(1))
+    if (label in desc or label in text) if contains else (desc.startswith(label) or text.startswith(label)):
         x1, y1, x2, y2 = map(int, re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', node).groups())
         print((x1 + x2) // 2, (y1 + y2) // 2)
         break
@@ -117,6 +118,39 @@ tap_label "Contents"
 tap_label "Bookmarks"
 adb exec-out screencap -p > "$OUT/10-bookmarks-list.png"
 adb shell input keyevent KEYCODE_BACK; sleep 1
+
+# Highlights, notes and the dictionary: press and hold a word, then use the menu.
+long_press() { adb shell input swipe "$1" "$2" "$1" "$2" 1200; sleep 2; }
+adb shell input tap $((W / 2)) $((H / 2)); sleep 1   # hide the controls
+long_press $((W * 35 / 100)) $((H / 2))
+adb exec-out screencap -p > "$OUT/11-selection-menu.png"
+tap_label "Highlight"
+adb exec-out screencap -p > "$OUT/12-highlighted.png"
+adb shell input tap $((W * 35 / 100)) $((H / 2)); sleep 2
+adb exec-out screencap -p > "$OUT/13-highlight-sheet.png"
+adb shell input text "A%snote%sabout%sthis"; sleep 1
+tap_label "Done"
+long_press $((W * 55 / 100)) $((H * 62 / 100))
+tap_label "Define"
+sleep 4
+adb exec-out screencap -p > "$OUT/14-define.png"
+adb shell input keyevent KEYCODE_BACK; sleep 1
+
+# Search the whole book and open a match.
+adb shell input tap $((W / 2)) $((H / 2)); sleep 2
+tap_label "Search in book"
+adb shell input text "landlady"; sleep 6
+adb exec-out screencap -p > "$OUT/15-search.png"
+tap_label "·" contains
+sleep 4
+adb exec-out screencap -p > "$OUT/16-search-result.png"
+adb shell input tap $((W / 2)) $((H / 2)); sleep 2
+tap_label "Contents"
+tap_label "Highlights"
+adb exec-out screencap -p > "$OUT/17-highlights-list.png"
+adb shell input keyevent KEYCODE_BACK; sleep 1
+adb shell run-as $PKG cat files/library.json > "$OUT/library.json" || true
+
 adb shell dumpsys package com.svox.pico > /dev/null 2>&1 && echo "pico present" >> "$OUT/tts.txt"
 adb shell settings get secure tts_default_synth >> "$OUT/tts.txt" 2>&1 || true
 

@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.folio.reader.FolioApp
 import com.folio.reader.data.Bookmark
+import com.folio.reader.data.Highlight
+import com.folio.reader.data.HighlightColor
 import com.folio.reader.data.ReaderSettings
 import com.folio.reader.epub.EpubBook
 import com.folio.reader.epub.TocEntry
@@ -20,12 +22,18 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 /** One request to show a chapter. [token] makes repeated requests for the same place distinct. */
 data class ChapterRequest(
     val index: Int,
     val offset: Float,
     val fragment: String?,
+    /** Open at this character of the chapter's text (a highlight), rather than at [offset]. */
+    val charOffset: Int? = null,
+    /** Open at, and mark, match number [findIndex] of this search pattern. */
+    val find: String? = null,
+    val findIndex: Int = 0,
     val token: Long = System.nanoTime(),
 )
 
@@ -61,6 +69,18 @@ class ReaderViewModel(private val app: FolioApp, private val bookId: String) : V
     val bookmarks: StateFlow<List<Bookmark>> = library.books
         .map { books -> books.firstOrNull { it.id == bookId }?.bookmarks.orEmpty() }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    val highlights: StateFlow<List<Highlight>> = library.books
+        .map { books -> books.firstOrNull { it.id == bookId }?.highlights.orEmpty() }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /** The colour the last highlight was made in; new ones use it too. */
+    var highlightColor = HighlightColor.Yellow
+
+    private val _search = MutableStateFlow(SearchState())
+    val search: StateFlow<SearchState> = _search.asStateFlow()
+    private var searchJob: Job? = null
+    private val plainTexts = ConcurrentHashMap<Int, String>()
 
     private val _request = MutableStateFlow<ChapterRequest?>(null)
     val request: StateFlow<ChapterRequest?> = _request.asStateFlow()
@@ -111,7 +131,7 @@ class ReaderViewModel(private val app: FolioApp, private val bookId: String) : V
         val epub = book
         val sections = epub?.toc.orEmpty().filter { it.path == path }.map { it.fragment.orEmpty() }
         if (req != null && epub != null && epub.spine.getOrNull(req.index)?.path == path) {
-            return ChapterStart(req.offset, req.fragment, epub.language, sections)
+            return ChapterStart(req.offset, req.fragment, epub.language, sections, req.charOffset, req.find, req.findIndex)
         }
         return ChapterStart(0f, null, epub?.language, sections)
     }
@@ -210,6 +230,92 @@ class ReaderViewModel(private val app: FolioApp, private val bookId: String) : V
         show(mark.chapterIndex.coerceIn(0, epub.spine.lastIndex), mark.chapterOffset, null)
     }
 
+    /** Saves a new highlight over characters [start] to [end] of the chapter on screen. */
+    fun addHighlight(start: Int, end: Int, text: String, note: String = ""): Highlight? {
+        val s = _state.value
+        if (book == null || !s.chapterReady) return null
+        val pageOffset = if (s.pageCount > 1) s.page.toFloat() / (s.pageCount - 1) else 0f
+        val mark = Highlight(
+            id = UUID.randomUUID().toString(),
+            chapterIndex = s.chapterIndex,
+            start = start,
+            end = end,
+            text = text,
+            color = highlightColor,
+            note = note,
+            progress = progressFor(s.chapterIndex, pageOffset),
+            chapterTitle = s.chapterTitle,
+            createdAt = System.currentTimeMillis(),
+        )
+        saveHighlight(mark)
+        return mark
+    }
+
+    fun saveHighlight(mark: Highlight) {
+        highlightColor = mark.color
+        app.appScope.launch { library.saveHighlight(bookId, mark) }
+    }
+
+    fun removeHighlight(mark: Highlight) {
+        app.appScope.launch { library.removeHighlight(bookId, mark.id) }
+    }
+
+    fun openHighlight(mark: Highlight) {
+        val epub = book ?: return
+        val index = mark.chapterIndex.coerceIn(0, epub.spine.lastIndex)
+        show(index, chapterOffsetOf(index, mark.progress), null, charOffset = mark.start)
+    }
+
+    /** Searches the whole book, publishing matches chapter by chapter as they're found. */
+    fun search(query: String) {
+        searchJob?.cancel()
+        val q = query.trim()
+        _search.value = SearchState(query = query, running = q.length >= 2)
+        if (q.length < 2) return
+        searchJob = viewModelScope.launch {
+            delay(250) // wait for typing to pause
+            val epub = book ?: return@launch
+            val regex = Regex(BookSearch.pattern(q), RegexOption.IGNORE_CASE)
+            val hits = mutableListOf<SearchHit>()
+            var truncated = false
+            for (i in epub.spine.indices) {
+                val found = withContext(Dispatchers.Default) {
+                    val text = plainTexts.getOrPut(i) {
+                        epub.readBytes(epub.spine[i].path)?.let { BookSearch.plainText(String(it, Charsets.UTF_8)) }.orEmpty()
+                    }
+                    val title = epub.toc.getOrNull(tocIndexFor(epub, i))?.title ?: "Chapter ${i + 1}"
+                    regex.findAll(text).take(BookSearch.MAX_HITS - hits.size + 1).mapIndexed { n, m ->
+                        val (before, match, after) = BookSearch.excerpt(text, m.range.first, m.range.last + 1)
+                        val at = if (text.isEmpty()) 0f else m.range.first.toFloat() / text.length
+                        SearchHit(i, n, before, match, after, title, progressFor(i, at))
+                    }.toList()
+                }
+                if (hits.size + found.size > BookSearch.MAX_HITS) {
+                    hits += found.take(BookSearch.MAX_HITS - hits.size)
+                    truncated = true
+                } else {
+                    hits += found
+                }
+                _search.update { it.copy(hits = hits.toList()) }
+                if (truncated) break
+            }
+            _search.update { it.copy(running = false, truncated = truncated) }
+        }
+    }
+
+    fun openSearchHit(hit: SearchHit) {
+        val epub = book ?: return
+        val index = hit.chapterIndex.coerceIn(0, epub.spine.lastIndex)
+        show(index, chapterOffsetOf(index, hit.progress), null, find = BookSearch.pattern(_search.value.query), findIndex = hit.occurrence)
+    }
+
+    /** Where in chapter [index] a whole-book [progress] falls, 0..1. */
+    private fun chapterOffsetOf(index: Int, progress: Float): Float {
+        if (weights.isEmpty()) return 0f
+        val before = weights.take(index).sum()
+        return ((progress * totalWeight - before) / weights[index]).coerceIn(0f, 1f)
+    }
+
     val language: String? get() = book?.language
 
     fun updateSettings(transform: (ReaderSettings) -> ReaderSettings) = app.settings.update(transform)
@@ -222,7 +328,7 @@ class ReaderViewModel(private val app: FolioApp, private val bookId: String) : V
         return ((before + offset * weights[index]) / totalWeight).coerceIn(0f, 1f)
     }
 
-    private fun show(index: Int, offset: Float, fragment: String?) {
+    private fun show(index: Int, offset: Float, fragment: String?, charOffset: Int? = null, find: String? = null, findIndex: Int = 0) {
         val epub = book ?: return
         chapterOffset = offset
         val path = epub.spine[index].path
@@ -241,7 +347,7 @@ class ReaderViewModel(private val app: FolioApp, private val bookId: String) : V
             )
         }
         updateProgress()
-        _request.value = ChapterRequest(index, offset, fragment)
+        _request.value = ChapterRequest(index, offset, fragment, charOffset, find, findIndex)
         scheduleSave()
     }
 

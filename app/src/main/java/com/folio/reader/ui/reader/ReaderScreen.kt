@@ -4,9 +4,12 @@ package com.folio.reader.ui.reader
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
+import android.net.Uri
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebResourceRequest
@@ -61,6 +64,7 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -115,6 +119,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.folio.reader.FolioApp
 import com.folio.reader.PageKeys
 import com.folio.reader.data.Bookmark
+import com.folio.reader.data.Highlight
 import com.folio.reader.data.ReaderFont
 import com.folio.reader.data.ReaderSettings
 import com.folio.reader.data.ReaderTheme
@@ -126,6 +131,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONArray
+import org.json.JSONObject
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -153,6 +159,11 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
     var controlsVisible by rememberSaveable { mutableStateOf(true) }
     var showToc by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
+    var showSearch by remember { mutableStateOf(false) }
+    /** The highlight whose colour and note are being edited, and whether to start typing the note. */
+    var editing by remember { mutableStateOf<Highlight?>(null) }
+    var editingNote by remember { mutableStateOf(false) }
+    var defineTerm by remember { mutableStateOf<String?>(null) }
 
     // Show the controls briefly when a book opens so they're discoverable, then get out of the way.
     LaunchedEffect(state.loading) {
@@ -161,10 +172,40 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
             if (!showToc && !showSettings) controlsVisible = false
         }
     }
-    var webView by remember { mutableStateOf<WebView?>(null) }
+    var webView by remember { mutableStateOf<FolioWebView?>(null) }
     val bookmarks by vm.bookmarks.collectAsStateWithLifecycle()
     val bookmarkHere = vm.bookmarkHere(bookmarks, state)
     var tocTab by remember { mutableStateOf(0) }
+    val highlights by vm.highlights.collectAsStateWithLifecycle()
+    val search by vm.search.collectAsStateWithLifecycle()
+
+    // Draw this chapter's highlights each time it's laid out, and whenever they change.
+    LaunchedEffect(highlights, state.chapterIndex, state.chapterReady, webView) {
+        if (!state.chapterReady) return@LaunchedEffect
+        val list = JSONArray()
+        highlights.filter { it.chapterIndex == state.chapterIndex }.forEach {
+            list.put(JSONObject().put("id", it.id).put("s", it.start).put("e", it.end).put("c", it.color.key))
+        }
+        webView?.evaluateJavascript("window.folio && folio.setHighlights($list)", null)
+    }
+
+    val clipboard = LocalContext.current.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    // An action picked from the menu over selected text (see SELECTION_ACTIONS).
+    fun onSelection(action: Int, json: String) {
+        val sel = runCatching { JSONObject(json) }.getOrNull() ?: return
+        val start = sel.optInt("s")
+        val end = sel.optInt("e")
+        val text = sel.optString("text")
+        when (action) {
+            0 -> vm.addHighlight(start, end, text)
+            1 -> vm.addHighlight(start, end, text)?.let {
+                editing = it
+                editingNote = true
+            }
+            2 -> defineTerm = Dictionary.termFrom(text).ifEmpty { null }
+            3 -> clipboard.setPrimaryClip(ClipData.newPlainText("Folio", text))
+        }
+    }
 
     fun toggleBookmark() {
         val existing = bookmarkHere
@@ -261,7 +302,7 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
 
     // Volume buttons turn pages while the book is open.
     val currentSettings by rememberUpdatedState(settings)
-    val sheetsOpen by rememberUpdatedState(showToc || showSettings)
+    val sheetsOpen by rememberUpdatedState(showToc || showSettings || showSearch || editing != null || defineTerm != null)
     DisposableEffect(Unit) {
         PageKeys.handler = PageKeys.Handler(
             // Never while reading aloud: then the buttons should set the volume.
@@ -290,6 +331,13 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
                     theme = theme,
                     onTap = onTap,
                     onManualTurn = onManualTurn,
+                    onSelection = ::onSelection,
+                    onHighlightTap = { id ->
+                        highlights.firstOrNull { it.id == id }?.let {
+                            editing = it
+                            editingNote = false
+                        }
+                    },
                     onCreated = { webView = it },
                     modifier = Modifier
                         .fillMaxSize()
@@ -398,6 +446,7 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
                     onBack = onBack,
                     bookmarked = bookmarkHere != null,
                     onBookmark = ::toggleBookmark,
+                    onSearch = { showSearch = true },
                     listening = readAloud.active,
                     onListen = {
                         if (readAloud.active) stopReading() else startReading()
@@ -428,6 +477,7 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
             TocSheet(
                 state = state,
                 bookmarks = bookmarks,
+                highlights = highlights,
                 tab = tocTab,
                 onTab = { tocTab = it },
                 onSelect = { entry ->
@@ -441,7 +491,51 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
                     controlsVisible = false
                 },
                 onDeleteBookmark = vm::removeBookmark,
+                onOpenHighlight = { mark ->
+                    vm.openHighlight(mark)
+                    showToc = false
+                    controlsVisible = false
+                },
+                onEditHighlight = {
+                    editing = it
+                    editingNote = false
+                },
                 onDismiss = { showToc = false },
+            )
+        }
+        if (showSearch) {
+            SearchSheet(
+                state = search,
+                onQuery = vm::search,
+                onOpen = { hit ->
+                    vm.openSearchHit(hit)
+                    showSearch = false
+                    controlsVisible = false
+                },
+                onDismiss = { showSearch = false },
+            )
+        }
+        editing?.let { mark ->
+            HighlightSheet(
+                mark = mark,
+                focusNote = editingNote,
+                onSave = vm::saveHighlight,
+                onDelete = {
+                    vm.removeHighlight(mark)
+                    editing = null
+                },
+                onDismiss = { editing = null },
+            )
+        }
+        defineTerm?.let { term ->
+            DictionarySheet(
+                term = term,
+                onWebSearch = {
+                    runCatching {
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/search?q=" + Uri.encode("define $term"))))
+                    }
+                },
+                onDismiss = { defineTerm = null },
             )
         }
         if (showSettings) {
@@ -472,17 +566,23 @@ private fun BookWebView(
     theme: ReaderTheme,
     onTap: (Int) -> Unit,
     onManualTurn: () -> Unit,
-    onCreated: (WebView?) -> Unit,
+    onSelection: (action: Int, json: String) -> Unit,
+    onHighlightTap: (id: String) -> Unit,
+    onCreated: (FolioWebView?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     val currentOnManualTurn = rememberUpdatedState(onManualTurn)
+    val currentOnSelection = rememberUpdatedState(onSelection)
+    val currentOnHighlightTap = rememberUpdatedState(onHighlightTap)
     val css = remember(prefs, theme) { ReaderContent.css(prefs, theme) }
     val currentCss = rememberUpdatedState(css)
     val currentOnTap = rememberUpdatedState(onTap)
 
     val webView = remember {
-        WebView(context).apply {
+        FolioWebView(context).apply {
+            selectionActions = SELECTION_ACTIONS
+            onSelectionAction = { action, json -> currentOnSelection.value(action, json) }
             // Without explicit MATCH_PARENT params Compose adds the view as WRAP_CONTENT, and
             // WebView then sizes its viewport to the content, so 100vh (and the pages) break.
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
@@ -510,6 +610,7 @@ private fun BookWebView(
                     nextRequested = { vm.hasNextChapter().also { if (it) view.post { vm.nextChapter() } } },
                     prevRequested = { vm.hasPrevChapter().also { if (it) view.post { vm.prevChapter() } } },
                     manualTurn = { view.post { currentOnManualTurn.value() } },
+                    highlightTapped = { id -> view.post { currentOnHighlightTap.value(id) } },
                 ),
                 "FolioBridge",
             )
@@ -574,12 +675,16 @@ private fun BookWebView(
     AndroidView(factory = { webView }, modifier = modifier)
 }
 
+/** The menu over selected text; [onSelection] in ReaderScreen handles them by position. */
+private val SELECTION_ACTIONS = listOf("Highlight", "Note", "Define", "Copy")
+
 @Composable
 private fun ReaderTopBar(
     title: String,
     onBack: () -> Unit,
     bookmarked: Boolean,
     onBookmark: () -> Unit,
+    onSearch: () -> Unit,
     listening: Boolean,
     onListen: () -> Unit,
     canListen: Boolean,
@@ -608,6 +713,9 @@ private fun ReaderTopBar(
                     .weight(1f)
                     .padding(end = 4.dp),
             )
+            IconButton(onClick = onSearch) {
+                Icon(Icons.Filled.Search, contentDescription = "Search in book")
+            }
             if (canListen) {
                 IconButton(onClick = onListen) {
                     Icon(
@@ -761,11 +869,14 @@ private fun ReaderBottomPanel(
 private fun TocSheet(
     state: ReaderUiState,
     bookmarks: List<Bookmark>,
+    highlights: List<Highlight>,
     tab: Int,
     onTab: (Int) -> Unit,
     onSelect: (TocEntry) -> Unit,
     onOpenBookmark: (Bookmark) -> Unit,
     onDeleteBookmark: (Bookmark) -> Unit,
+    onOpenHighlight: (Highlight) -> Unit,
+    onEditHighlight: (Highlight) -> Unit,
     onDismiss: () -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState()) {
@@ -774,12 +885,13 @@ private fun TocSheet(
                 .fillMaxWidth()
                 .padding(start = 24.dp, end = 24.dp, bottom = 12.dp),
         ) {
-            listOf("Contents", "Bookmarks").forEachIndexed { i, label ->
+            listOf("Contents", "Bookmarks", "Highlights").forEachIndexed { i, label ->
                 SegmentedButton(
                     selected = tab == i,
                     onClick = { onTab(i) },
-                    shape = SegmentedButtonDefaults.itemShape(i, 2),
-                ) { Text(if (i == 1 && bookmarks.isNotEmpty()) "$label (${bookmarks.size})" else label) }
+                    shape = SegmentedButtonDefaults.itemShape(i, 3),
+                    icon = {},
+                ) { Text(label, maxLines = 1, style = MaterialTheme.typography.labelMedium) }
             }
         }
         when (tab) {
@@ -826,7 +938,8 @@ private fun TocSheet(
                     item { Spacer(Modifier.height(24.dp)) }
                 }
             }
-            else -> BookmarkList(bookmarks, onOpenBookmark, onDeleteBookmark)
+            1 -> BookmarkList(bookmarks, onOpenBookmark, onDeleteBookmark)
+            else -> HighlightList(highlights, onOpenHighlight, onEditHighlight)
         }
     }
 }

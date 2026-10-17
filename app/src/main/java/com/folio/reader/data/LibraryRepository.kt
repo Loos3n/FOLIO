@@ -53,6 +53,63 @@ data class Bookmark(
     }
 }
 
+/** Highlight colours, as stored; the reader draws each in a soft tint that works on any theme. */
+enum class HighlightColor(val key: String, val argb: Long) {
+    Yellow("yellow", 0xFFF2C94C),
+    Green("green", 0xFF6FCF97),
+    Blue("blue", 0xFF56A8F2),
+    Pink("pink", 0xFFF28AB2);
+
+    companion object {
+        fun of(key: String?) = entries.firstOrNull { it.key == key } ?: Yellow
+    }
+}
+
+/**
+ * A highlighted passage, located by character offsets into the chapter file's text
+ * (counted the way the reader script walks it), with an optional note.
+ */
+data class Highlight(
+    val id: String,
+    val chapterIndex: Int,
+    val start: Int,
+    val end: Int,
+    val text: String,
+    val color: HighlightColor,
+    val note: String,
+    /** Whole-book progress at the passage, 0..1. */
+    val progress: Float,
+    val chapterTitle: String,
+    val createdAt: Long,
+) {
+    fun toJson(): JSONObject = JSONObject()
+        .put("id", id)
+        .put("chapterIndex", chapterIndex)
+        .put("start", start)
+        .put("end", end)
+        .put("text", text)
+        .put("color", color.key)
+        .put("note", note)
+        .put("progress", progress.toDouble())
+        .put("chapterTitle", chapterTitle)
+        .put("createdAt", createdAt)
+
+    companion object {
+        fun fromJson(o: JSONObject) = Highlight(
+            id = o.optString("id").ifEmpty { UUID.randomUUID().toString() },
+            chapterIndex = o.optInt("chapterIndex"),
+            start = o.optInt("start"),
+            end = o.optInt("end"),
+            text = o.optString("text"),
+            color = HighlightColor.of(o.optString("color")),
+            note = o.optString("note"),
+            progress = o.optDouble("progress", 0.0).toFloat(),
+            chapterTitle = o.optString("chapterTitle"),
+            createdAt = o.optLong("createdAt"),
+        )
+    }
+}
+
 data class Book(
     val id: String,
     val title: String,
@@ -68,6 +125,8 @@ data class Book(
     val chapterOffset: Float = 0f,
     /** Saved pages, in reading order. */
     val bookmarks: List<Bookmark> = emptyList(),
+    /** Highlights and notes, in reading order. */
+    val highlights: List<Highlight> = emptyList(),
 ) {
     fun toJson(): JSONObject = JSONObject()
         .put("id", id)
@@ -81,6 +140,7 @@ data class Book(
         .put("chapterIndex", chapterIndex)
         .put("chapterOffset", chapterOffset.toDouble())
         .put("bookmarks", JSONArray().apply { bookmarks.forEach { put(it.toJson()) } })
+        .put("highlights", JSONArray().apply { highlights.forEach { put(it.toJson()) } })
 
     companion object {
         fun fromJson(o: JSONObject) = Book(
@@ -96,6 +156,9 @@ data class Book(
             chapterOffset = o.optDouble("chapterOffset", 0.0).toFloat(),
             bookmarks = o.optJSONArray("bookmarks")?.let { a ->
                 List(a.length()) { Bookmark.fromJson(a.getJSONObject(it)) }
+            }.orEmpty(),
+            highlights = o.optJSONArray("highlights")?.let { a ->
+                List(a.length()) { Highlight.fromJson(a.getJSONObject(it)) }
             }.orEmpty(),
         )
     }
@@ -173,6 +236,17 @@ class LibraryRepository(private val context: Context) {
 
     suspend fun removeBookmark(id: String, bookmarkId: String) =
         update(id) { book -> book.copy(bookmarks = book.bookmarks.filterNot { it.id == bookmarkId }) }
+
+    /** Adds [highlight], or replaces the one with the same id (e.g. after editing its note). */
+    suspend fun saveHighlight(id: String, highlight: Highlight) = update(id) { book ->
+        book.copy(
+            highlights = (book.highlights.filterNot { it.id == highlight.id } + highlight)
+                .sortedWith(compareBy<Highlight>({ it.chapterIndex }, { it.start })),
+        )
+    }
+
+    suspend fun removeHighlight(id: String, highlightId: String) =
+        update(id) { book -> book.copy(highlights = book.highlights.filterNot { it.id == highlightId }) }
 
     suspend fun resetProgress(id: String) =
         update(id) { it.copy(chapterIndex = 0, chapterOffset = 0f, progress = 0f, lastOpenedAt = 0L) }

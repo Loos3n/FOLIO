@@ -4,6 +4,7 @@ import android.content.res.AssetManager
 import android.net.Uri
 import android.webkit.JavascriptInterface
 import android.webkit.WebResourceResponse
+import com.folio.reader.data.HighlightColor
 import com.folio.reader.data.ReaderSettings
 import com.folio.reader.data.ReaderTheme
 import com.folio.reader.epub.EpubBook
@@ -25,6 +26,11 @@ data class ChapterStart(
     val fragment: String?,
     val language: String?,
     val sections: List<String>,
+    /** A text position to open at instead of [offset] (see [ChapterRequest.charOffset]). */
+    val charOffset: Int? = null,
+    /** A search pattern and which match of it in this file to open at and mark. */
+    val find: String? = null,
+    val findIndex: Int = 0,
 )
 
 object ReaderContent {
@@ -82,6 +88,8 @@ object ReaderContent {
                 // Each id is encoded, so the comma separator can't appear inside one.
                 append("&amp;s=").append(Uri.encode(start.sections.joinToString(",") { Uri.encode(it) }))
             }
+            if (start.charOffset != null) append("&amp;c=").append(start.charOffset)
+            if (start.find != null) append("&amp;q=").append(Uri.encode(start.find)).append("&amp;n=").append(start.findIndex)
         }
         // Valid in both HTML and XHTML documents (no '<' or '&' inside the CSS).
         val tags = "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1, user-scalable=no\"/>" +
@@ -155,6 +163,14 @@ object ReaderContent {
             append(".folio-mark div{position:absolute;border-radius:3px;}")
             append(".folio-sentence div{box-shadow:inset 0 0 0 999px ${link}26;}")
             append(".folio-word div{box-shadow:inset 0 0 0 999px ${link}66;}")
+            // The reader's own highlights, and a search match being shown.
+            for (c in HighlightColor.entries) {
+                val tint = hex(c.argb) + if (theme.isDark) "66" else "59"
+                append("::highlight(folio-hl-${c.key}){background-color:$tint;}")
+                append(".folio-hl-${c.key} div{box-shadow:inset 0 0 0 999px $tint;}")
+            }
+            append("::highlight(folio-find){background-color:${link}40;text-decoration:underline;}")
+            append(".folio-find div{box-shadow:inset 0 0 0 999px ${link}40;}")
             // .folio-p marks the book's ordinary body paragraphs (not centred or right-aligned ones),
             // so the justify setting applies both ways without flattening title pages.
             if (settings.justify) append(".folio-p{text-align:justify !important;text-align-last:start;}")
@@ -192,6 +208,7 @@ object ReaderContent {
           var start = parseFloat(params.o || '0') || 0;
           var fragment = params.f || '';
           var sections = params.s ? params.s.split(',').map(decodeURIComponent) : [];
+          var target = null; // a text range to open at (search match or highlight), until shown
           var bridge = window.FolioBridge;
           var root = document.documentElement;
           var page = 0;
@@ -319,6 +336,7 @@ object ReaderContent {
             prepare();
             setWidthVar();
             var p = pageOfFragment();
+            if (p < 0) p = pageOfTarget();
             if (p < 0) p = Math.round(start * lastPage());
             show(p, false);
           }
@@ -333,7 +351,9 @@ object ReaderContent {
             requestAnimationFrame(function () {
               restore();
               fragment = '';
+              target = null;
               ready = true;
+              drawHighlights();
               var s = sectionInfo();
               if (bridge) bridge.onReady(page, pageCount(), offset(), s[0], s[1]);
             });
@@ -344,7 +364,7 @@ object ReaderContent {
             if (!ready) { finishLoad(); return; }
             var o = offset();
             setWidthVar();
-            requestAnimationFrame(function () { show(Math.round(o * lastPage()), false); });
+            requestAnimationFrame(function () { show(Math.round(o * lastPage()), false); drawHighlights(); });
           });
 
           // Swipe between pages. The page follows the finger, then settles.
@@ -390,6 +410,9 @@ object ReaderContent {
               if (t.tagName && t.tagName.toLowerCase() === 'a' && t.getAttribute('href')) return;
             }
             if (hasSelection()) return;
+            if (found) { found = null; paint('folio-find', []); }
+            var hit = markAt(e.clientX, e.clientY);
+            if (hit && bridge && bridge.onHighlightTap) { bridge.onHighlightTap(hit); return; }
             var x = e.clientX / width();
             if (bridge) bridge.onTap(x < 0.3 ? -1 : (x > 0.7 ? 1 : 0));
           });
@@ -494,9 +517,29 @@ object ReaderContent {
           }
           var tts = null;
           var marks = {};
-          function highlight(name, range) {
+          function highlight(name, range) { paint(name, range ? [range] : []); }
+          // The boxes of the text in a range (a range's own rects also include whole elements
+          // inside it, which would double up).
+          function textRects(range) {
+            var out = [], root = range.commonAncestorContainer;
+            if (root.nodeType === 3) return Array.prototype.slice.call(range.getClientRects());
+            var w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT), n, r = document.createRange();
+            while ((n = w.nextNode())) {
+              if (!range.intersectsNode(n)) continue;
+              r.selectNodeContents(n);
+              if (n === range.startContainer) r.setStart(n, range.startOffset);
+              if (n === range.endContainer) r.setEnd(n, range.endOffset);
+              var rs = r.getClientRects();
+              for (var k = 0; k < rs.length; k++) out.push(rs[k]);
+            }
+            return out;
+          }
+          function paint(name, ranges) {
             if (window.CSS && CSS.highlights && window.Highlight) {
-              if (range) CSS.highlights.set(name, new Highlight(range)); else CSS.highlights.delete(name);
+              if (!ranges.length) { CSS.highlights.delete(name); return; }
+              var h = new Highlight();
+              ranges.forEach(function (r) { h.add(r); });
+              CSS.highlights.set(name, h);
               return;
             }
             // Older WebViews (before Chrome 105) lack CSS highlights: draw boxes behind the text instead.
@@ -508,16 +551,103 @@ object ReaderContent {
               marks[name] = box;
             }
             box.innerHTML = '';
-            if (!range) return;
-            var b = document.body.getBoundingClientRect(), rs = range.getClientRects();
-            for (var k = 0; k < rs.length; k++) {
-              var d = document.createElement('div');
-              d.style.left = (rs[k].left - b.left) + 'px';
-              d.style.top = (rs[k].top - b.top) + 'px';
-              d.style.width = rs[k].width + 'px';
-              d.style.height = rs[k].height + 'px';
-              box.appendChild(d);
+            var b = document.body.getBoundingClientRect();
+            ranges.forEach(function (range) {
+              var rs = textRects(range);
+              for (var k = 0; k < rs.length; k++) {
+                var d = document.createElement('div');
+                d.style.left = (rs[k].left - b.left) + 'px';
+                d.style.top = (rs[k].top - b.top) + 'px';
+                d.style.width = rs[k].width + 'px';
+                d.style.height = rs[k].height + 'px';
+                box.appendChild(d);
+              }
+            });
+          }
+
+          // ---- Positions in the chapter's text, as character offsets into all its text
+          // nodes in order. Highlights are stored this way, and search results opened by them.
+          var textIndex = null;
+          function buildIndex() {
+            if (textIndex) return textIndex;
+            var w = textWalker(null), n, at = 0, list = [], atOf = new Map();
+            while ((n = w.nextNode())) { list.push({ node: n, at: at }); atOf.set(n, at); at += n.nodeValue.length; }
+            textIndex = { list: list, atOf: atOf, total: at };
+            return textIndex;
+          }
+          function offsetOf(c, o) {
+            var idx = buildIndex();
+            if (c.nodeType === 3 && idx.atOf.has(c)) return idx.atOf.get(c) + Math.min(o, c.nodeValue.length);
+            var r = document.createRange();
+            r.setStart(c, o);
+            for (var i = 0; i < idx.list.length; i++) if (r.comparePoint(idx.list[i].node, 0) >= 0) return idx.list[i].at;
+            return idx.total;
+          }
+          function locate(x) {
+            var list = buildIndex().list, lo = 0, hi = list.length - 1;
+            if (!list.length) return null;
+            while (lo < hi) { var mid = (lo + hi + 1) >> 1; if (list[mid].at <= x) lo = mid; else hi = mid - 1; }
+            var it = list[lo];
+            return { node: it.node, offset: Math.max(0, Math.min(x - it.at, it.node.nodeValue.length)) };
+          }
+          function rangeAt(s, e) {
+            var a = locate(s), b = locate(e);
+            if (!a || !b) return null;
+            var r = document.createRange();
+            r.setStart(a.node, a.offset);
+            r.setEnd(b.node, b.offset);
+            return r;
+          }
+          function fullText() {
+            return buildIndex().list.map(function (it) { return it.node.nodeValue; }).join('');
+          }
+          // The n-th match of a search pattern (built by the app, so it counts matches the same way).
+          function findNth(pattern, n) {
+            var re;
+            try { re = new RegExp(pattern, 'gi'); } catch (err) { return null; }
+            var text = fullText(), m, i = 0;
+            while ((m = re.exec(text))) {
+              if (!m[0].length) { re.lastIndex++; continue; }
+              if (i === n) return rangeAt(m.index, m.index + m[0].length);
+              i++;
             }
+            return null;
+          }
+          var found = null;
+          function pageOfTarget() {
+            if (target === null) {
+              target = false;
+              if (params.q) { found = findNth(params.q, parseInt(params.n || '0', 10) || 0); target = found || false; }
+              else if (params.c) { var at = parseInt(params.c, 10); if (at >= 0) target = rangeAt(at, at + 1) || false; }
+            }
+            if (!target) return -1;
+            var rs = target.getClientRects();
+            return rs.length ? pageOfRect(rs[0]) : -1;
+          }
+
+          // ---- The reader's highlights.
+          var COLORS = ['yellow', 'green', 'blue', 'pink'];
+          var userMarks = [];
+          function drawHighlights() {
+            var by = {};
+            COLORS.forEach(function (c) { by[c] = []; });
+            userMarks.forEach(function (h) {
+              if (h.r === undefined) h.r = rangeAt(h.s, h.e);
+              if (h.r) (by[h.c] || by.yellow).push(h.r);
+            });
+            COLORS.forEach(function (c) { paint('folio-hl-' + c, by[c]); });
+            paint('folio-find', found ? [found] : []);
+          }
+          function markAt(x, y) {
+            for (var i = userMarks.length - 1; i >= 0; i--) {
+              var r = userMarks[i].r;
+              if (!r) continue;
+              var rs = r.getClientRects();
+              for (var k = 0; k < rs.length; k++) {
+                if (x >= rs[k].left && x <= rs[k].right && y >= rs[k].top - 2 && y <= rs[k].bottom + 2) return userMarks[i].id;
+              }
+            }
+            return null;
           }
           function userTurned() { if (tts && bridge && bridge.onManualTurn) bridge.onManualTurn(); }
 
@@ -563,6 +693,25 @@ object ReaderContent {
                 if (p !== page) show(p, true);
               }
             },
+            // The selected text and where it is, for highlighting; null if nothing is selected.
+            selection: function () {
+              var sel = window.getSelection();
+              if (!sel || !sel.rangeCount || sel.isCollapsed) return null;
+              var r = sel.getRangeAt(0);
+              var s = offsetOf(r.startContainer, r.startOffset), e = offsetOf(r.endContainer, r.endOffset);
+              var text = String(sel).replace(/\s+/g, ' ').trim();
+              if (e <= s || !text) return null;
+              return { s: s, e: e, text: text.length > 1000 ? text.slice(0, 1000) + '\u2026' : text };
+            },
+            clearSelection: function () {
+              var sel = window.getSelection();
+              if (sel) sel.removeAllRanges();
+            },
+            // [{id, s, e, c}] for this chapter; replaces whatever was drawn before.
+            setHighlights: function (list) {
+              userMarks = (list || []).map(function (h) { return { id: h.id, s: h.s, e: h.e, c: h.c }; });
+              if (ready) drawHighlights();
+            },
             ttsStop: function () {
               tts = null;
               highlight('folio-sentence', null);
@@ -583,7 +732,7 @@ object ReaderContent {
               setWidthVar();
               requestAnimationFrame(function () {
                 show(Math.round(o * lastPage()), false);
-                setTimeout(function () { show(Math.round(o * lastPage()), false); }, 80);
+                setTimeout(function () { show(Math.round(o * lastPage()), false); drawHighlights(); }, 80);
               });
             }
           };
@@ -602,6 +751,8 @@ class ReaderBridge(
     private val prevRequested: () -> Boolean,
     /** The reader turned the page themselves (only reported while reading aloud). */
     private val manualTurn: () -> Unit = {},
+    /** The reader tapped one of their highlights. */
+    private val highlightTapped: (id: String) -> Unit = {},
 ) {
     @JavascriptInterface fun onPage(page: Int, count: Int, offset: Float, section: Int, sectionEnd: Int) =
         pageChanged(page, count, offset, section, sectionEnd)
@@ -611,4 +762,5 @@ class ReaderBridge(
     @JavascriptInterface fun nextChapter(): Boolean = nextRequested()
     @JavascriptInterface fun prevChapter(): Boolean = prevRequested()
     @JavascriptInterface fun onManualTurn() = manualTurn()
+    @JavascriptInterface fun onHighlightTap(id: String) = highlightTapped(id)
 }
