@@ -35,7 +35,6 @@ data class Bookmark(
         .put("id", id)
         .put("chapterIndex", chapterIndex)
         .put("chapterOffset", chapterOffset.toDouble())
-        .put("bookmarks", JSONArray().apply { bookmarks.forEach { put(it.toJson()) } })
         .put("progress", progress.toDouble())
         .put("chapterTitle", chapterTitle)
         .put("snippet", snippet)
@@ -81,6 +80,7 @@ data class Book(
         .put("progress", progress.toDouble())
         .put("chapterIndex", chapterIndex)
         .put("chapterOffset", chapterOffset.toDouble())
+        .put("bookmarks", JSONArray().apply { bookmarks.forEach { put(it.toJson()) } })
 
     companion object {
         fun fromJson(o: JSONObject) = Book(
