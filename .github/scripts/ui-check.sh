@@ -78,9 +78,11 @@ done
 # Bookmarks and read-aloud, on the first chapter of the story (file 3).
 # Taps controls by their accessibility label, read from a UI dump.
 find_label() {
-  adb shell uiautomator dump /sdcard/ui.xml > /dev/null 2>&1 || true
+  local xy try
+  for try in 1 2 3; do
+  adb shell rm -f /sdcard/ui.xml
+  adb shell uiautomator dump /sdcard/ui.xml 2>&1 | tail -1 >> "$OUT/dumps.txt" || true
   adb shell cat /sdcard/ui.xml > ui.xml 2>/dev/null || true
-  local xy
   xy=$(python3 - "$1" "${2:-}" <<'PY'
 import html, re, sys
 label = sys.argv[1].encode().decode('unicode_escape')
@@ -95,6 +97,9 @@ for node in re.findall(r'<node [^>]*>', xml):
         break
 PY
 )
+  [ -n "$xy" ] && break
+  sleep 2
+  done
   echo "$xy"
 }
 tap_label() {
@@ -133,7 +138,7 @@ adb shell input keyevent KEYCODE_BACK; sleep 1
 pip install --quiet pillow || true
 # Taps item N (0 = Highlight, 1 = Note, 2 = Define, 3 = Copy) of the selection menu.
 tap_menu() {
-  adb exec-out screencap -p > menu.png
+  adb exec-out screencap -p > menu.png; cp menu.png "$OUT/menu-$1.png"
   local xy
   xy=$(python3 .github/scripts/menu-item.py menu.png "$1")
   if [ -n "$xy" ]; then adb shell input tap $xy; else echo "no selection menu item $1" | tee -a "$OUT/tts.txt"; fi

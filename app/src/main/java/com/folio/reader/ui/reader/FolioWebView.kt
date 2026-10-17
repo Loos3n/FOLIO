@@ -3,6 +3,7 @@ package com.folio.reader.ui.reader
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Rect
+import android.util.Log
 import android.view.ActionMode
 import android.view.Menu
 import android.view.MenuItem
@@ -43,6 +44,7 @@ class FolioWebView(context: Context) : WebView(context) {
             val action = item.itemId - FIRST_ID
             if (action !in selectionActions.indices) return original.onActionItemClicked(mode, item)
             evaluateJavascript("window.folio ? folio.selection() : null") { json ->
+                Log.d("Folio", "selection action $action: $json")
                 mode.finish()
                 evaluateJavascript("window.folio && folio.clearSelection()", null)
                 if (json != null && json != "null") onSelectionAction(action, json)
