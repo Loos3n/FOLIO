@@ -7,6 +7,16 @@ OUT=shots
 mkdir -p "$OUT"
 
 adb install -r app/build/outputs/apk/debug/app-debug.apk
+
+# The emulator image has no text-to-speech engine; add eSpeak NG (from F-Droid) so
+# read-aloud can be exercised.
+ESPEAK=com.reecedunn.espeak
+code=$(curl -fsSL "https://f-droid.org/api/v1/packages/$ESPEAK" | python3 -c 'import json,sys; print(json.load(sys.stdin)["suggestedVersionCode"])' || true)
+if [ -n "$code" ] && curl -fsSL --retry 3 -o espeak.apk "https://f-droid.org/repo/${ESPEAK}_${code}.apk"; then
+  adb install -r espeak.apk && adb shell settings put secure tts_default_synth $ESPEAK || true
+else
+  echo "Couldn't fetch eSpeak NG; read-aloud won't be testable"
+fi
 adb shell wm size > "$OUT/screen.txt"
 read -r W H < <(adb shell wm size | sed -n 's/.*: \([0-9]*\)x\([0-9]*\).*/\1 \2/p' | tail -1)
 W=${W:-1080}; H=${H:-2400}
