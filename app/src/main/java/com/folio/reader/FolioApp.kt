@@ -2,6 +2,7 @@ package com.folio.reader
 
 import android.app.Application
 import com.folio.reader.data.LibraryRepository
+import com.folio.reader.data.ReadingStats
 import com.folio.reader.data.SettingsRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -12,6 +13,8 @@ class FolioApp : Application() {
         private set
     lateinit var settings: SettingsRepository
         private set
+    lateinit var stats: ReadingStats
+        private set
 
     /** For writes that must finish even after the screen that started them is gone. */
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -20,5 +23,6 @@ class FolioApp : Application() {
         super.onCreate()
         library = LibraryRepository(this)
         settings = SettingsRepository(this)
+        stats = ReadingStats(this, appScope)
     }
 }

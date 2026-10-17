@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.folio.reader.FolioApp
 import com.folio.reader.data.Book
+import com.folio.reader.data.StatsSnapshot
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -35,7 +36,42 @@ class LibraryViewModel(private val app: FolioApp) : ViewModel() {
 
     val query = MutableStateFlow("")
     val shelf = MutableStateFlow(Shelf.All)
-    val sort = MutableStateFlow(SortOrder.Recent)
+    /** One of the reader's own collections to show instead of a shelf, or null. */
+    val collection = MutableStateFlow<String?>(null)
+    val sort = MutableStateFlow(
+        SortOrder.entries.firstOrNull { it.name == app.settings.settings.value.librarySort } ?: SortOrder.Recent,
+    )
+
+    val stats: StateFlow<StatsSnapshot> = app.stats.stats
+
+    /** Every collection name in use, alphabetically. */
+    val collections: StateFlow<List<String>> = library.books
+        .map { list -> list.flatMap { it.collections }.distinct().sortedBy { it.lowercase() } }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    fun setSort(order: SortOrder) {
+        sort.value = order
+        app.settings.update { it.copy(librarySort = order.name) }
+    }
+
+    fun showShelf(s: Shelf) {
+        shelf.value = s
+        collection.value = null
+    }
+
+    fun showCollection(name: String) {
+        shelf.value = Shelf.All
+        collection.value = name
+    }
+
+    fun setCollections(book: Book, names: List<String>) {
+        viewModelScope.launch {
+            library.setCollections(book.id, names)
+            // Don't leave the grid on a collection that no longer exists.
+            val c = collection.value
+            if (c != null && library.books.value.none { c in it.collections }) collection.value = null
+        }
+    }
 
     /** Books still being read, most recent first, for the "Continue reading" row. */
     val continueReading: StateFlow<List<Book>> = library.books
@@ -43,9 +79,10 @@ class LibraryViewModel(private val app: FolioApp) : ViewModel() {
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     /** The grid: filtered by shelf and search, in the chosen order. */
-    val books: StateFlow<List<Book>> = combine(library.books, query, shelf, sort) { list, q, s, order ->
+    val books: StateFlow<List<Book>> = combine(library.books, query, shelf, sort, collection) { list, q, s, order, c ->
         val needle = q.trim()
         list
+            .filter { c == null || c in it.collections }
             .filter {
                 when (s) {
                     Shelf.All -> true

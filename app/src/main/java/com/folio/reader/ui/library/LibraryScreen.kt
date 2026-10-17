@@ -104,6 +104,10 @@ fun LibraryScreen(
     val query by vm.query.collectAsStateWithLifecycle()
     val shelf by vm.shelf.collectAsStateWithLifecycle()
     val sort by vm.sort.collectAsStateWithLifecycle()
+    val collection by vm.collection.collectAsStateWithLifecycle()
+    val collections by vm.collections.collectAsStateWithLifecycle()
+    var showStats by remember { mutableStateOf(false) }
+    var editingCollections by remember { mutableStateOf<Book?>(null) }
     val importing by vm.importing.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     var pendingDelete by remember { mutableStateOf<Book?>(null) }
@@ -161,7 +165,13 @@ fun LibraryScreen(
                 modifier = Modifier.fillMaxSize(),
             ) {
                 item(span = { GridItemSpan(maxLineSpan) }, key = "header") {
-                    Header(count = allBooks.size, importing = importing, sort = sort, onSort = { vm.sort.value = it })
+                    Header(
+                        count = allBooks.size,
+                        importing = importing,
+                        sort = sort,
+                        onSort = vm::setSort,
+                        onStats = { showStats = true },
+                    )
                 }
                 item(span = { GridItemSpan(maxLineSpan) }, key = "search") {
                     SearchField(query = query, onQuery = { vm.query.value = it })
@@ -172,7 +182,13 @@ fun LibraryScreen(
                     }
                 }
                 item(span = { GridItemSpan(maxLineSpan) }, key = "shelves") {
-                    ShelfChips(shelf = shelf, onShelf = { vm.shelf.value = it })
+                    ShelfChips(
+                        shelf = shelf,
+                        collection = collection,
+                        collections = collections,
+                        onShelf = vm::showShelf,
+                        onCollection = vm::showCollection,
+                    )
                 }
                 if (books.isEmpty()) {
                     item(span = { GridItemSpan(maxLineSpan) }, key = "nothing") {
@@ -193,6 +209,7 @@ fun LibraryScreen(
                         vm = vm,
                         onOpen = { onOpen(book.id) },
                         onDelete = { pendingDelete = book },
+                        onCollections = { editingCollections = book },
                         modifier = Modifier.animateItem(),
                     )
                 }
@@ -205,6 +222,22 @@ fun LibraryScreen(
                     .background(MaterialTheme.colorScheme.background.copy(alpha = 0.94f)),
             )
         }
+    }
+
+    if (showStats) {
+        val stats by vm.stats.collectAsStateWithLifecycle()
+        StatsSheet(stats = stats, books = allBooks, onDismiss = { showStats = false })
+    }
+    editingCollections?.let { book ->
+        CollectionsDialog(
+            book = book,
+            existing = collections,
+            onSave = { names ->
+                vm.setCollections(book, names)
+                editingCollections = null
+            },
+            onDismiss = { editingCollections = null },
+        )
     }
 
     pendingDelete?.let { book ->
@@ -232,7 +265,7 @@ private fun greeting(): String = when (Calendar.getInstance().get(Calendar.HOUR_
 }
 
 @Composable
-private fun Header(count: Int, importing: Boolean, sort: SortOrder, onSort: (SortOrder) -> Unit) {
+private fun Header(count: Int, importing: Boolean, sort: SortOrder, onSort: (SortOrder) -> Unit, onStats: () -> Unit) {
     var menuOpen by remember { mutableStateOf(false) }
     Column {
         Row(verticalAlignment = Alignment.Bottom) {
@@ -248,6 +281,9 @@ private fun Header(count: Int, importing: Boolean, sort: SortOrder, onSort: (Sor
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+            IconButton(onClick = onStats) {
+                Icon(LibraryIcons.Stats, contentDescription = "Reading stats", tint = MaterialTheme.colorScheme.primary)
             }
             Box {
                 TextButton(onClick = { menuOpen = true }) { Text(sort.label) }
@@ -419,7 +455,13 @@ private fun ContinueCard(book: Book, vm: LibraryViewModel, onOpen: (String) -> U
 }
 
 @Composable
-private fun ShelfChips(shelf: Shelf, onShelf: (Shelf) -> Unit) {
+private fun ShelfChips(
+    shelf: Shelf,
+    collection: String?,
+    collections: List<String>,
+    onShelf: (Shelf) -> Unit,
+    onCollection: (String) -> Unit,
+) {
     Row(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         modifier = Modifier
@@ -430,12 +472,24 @@ private fun ShelfChips(shelf: Shelf, onShelf: (Shelf) -> Unit) {
     ) {
         Shelf.entries.forEach { option ->
             FilterChip(
-                selected = shelf == option,
+                selected = collection == null && shelf == option,
                 onClick = { onShelf(option) },
                 label = { Text(option.label) },
                 shape = CircleShape,
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                ),
+            )
+        }
+        collections.forEach { name ->
+            FilterChip(
+                selected = collection == name,
+                onClick = { onCollection(name) },
+                label = { Text(name) },
+                leadingIcon = { Icon(LibraryIcons.Collection, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                shape = CircleShape,
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = MaterialTheme.colorScheme.tertiaryContainer,
                 ),
             )
         }
@@ -448,6 +502,7 @@ private fun BookTile(
     vm: LibraryViewModel,
     onOpen: () -> Unit,
     onDelete: () -> Unit,
+    onCollections: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
@@ -478,6 +533,14 @@ private fun BookTile(
                         },
                     )
                 }
+                DropdownMenuItem(
+                    text = { Text("Collections…") },
+                    leadingIcon = { Icon(LibraryIcons.Collection, contentDescription = null) },
+                    onClick = {
+                        menuOpen = false
+                        onCollections()
+                    },
+                )
                 DropdownMenuItem(
                     text = { Text("Remove from library") },
                     leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null) },

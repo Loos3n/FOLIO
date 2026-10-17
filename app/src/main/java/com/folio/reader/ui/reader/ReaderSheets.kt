@@ -3,10 +3,13 @@
 package com.folio.reader.ui.reader
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -33,12 +36,15 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -408,6 +414,109 @@ internal fun DictionarySheet(term: String, onWebSearch: () -> Unit, onDismiss: (
                     Spacer(Modifier.height(16.dp))
                     FilledTonalButton(onClick = onWebSearch) { Text("Search the web") }
                 }
+            }
+        }
+    }
+}
+
+/** Read-aloud options: sleep timer, speed and voice. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun ReadAloudSheet(
+    voices: List<ReadAloud.VoiceOption>,
+    voice: String?,
+    rate: Float,
+    /** Minutes left on the timer, if one is set. */
+    sleepMinutes: Int?,
+    sleepAtChapterEnd: Boolean,
+    onVoice: (String?) -> Unit,
+    onRate: (Float) -> Unit,
+    onSleep: (minutes: Int?, chapterEnd: Boolean) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        Column(
+            Modifier
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 24.dp)
+                .padding(bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text("Read aloud", style = MaterialTheme.typography.headlineSmall)
+
+            Text("Sleep timer", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (sleepMinutes != null) {
+                Text(
+                    if (sleepMinutes <= 1) "Stops in under a minute" else "Stops in $sleepMinutes minutes",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val off = sleepMinutes == null && !sleepAtChapterEnd
+                FilterChip(selected = off, onClick = { onSleep(null, false) }, label = { Text("Off") })
+                listOf(15, 30, 45, 60).forEach { m ->
+                    FilterChip(
+                        selected = false,
+                        onClick = { onSleep(m, false) },
+                        label = { Text(if (m == 60) "1 hour" else "$m min") },
+                    )
+                }
+                FilterChip(selected = sleepAtChapterEnd, onClick = { onSleep(null, true) }, label = { Text("End of chapter") })
+            }
+
+            Text("Speed", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Slider(
+                    value = rate,
+                    onValueChange = { onRate((it * 20).roundToInt() / 20f) },
+                    valueRange = 0.5f..2f,
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    String.format(java.util.Locale.US, "%.2f", rate).trimEnd('0').trimEnd('.') + "×",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.width(56.dp),
+                    textAlign = TextAlign.End,
+                )
+            }
+
+            Text("Voice", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Column {
+                VoiceRow("Phone's default voice", null, voice == null) { onVoice(null) }
+                voices.forEach { v ->
+                    VoiceRow(v.label, if (v.network) "Needs internet" else null, voice == v.name) { onVoice(v.name) }
+                }
+                if (voices.isEmpty()) {
+                    Text(
+                        "Install more voices in your phone's text-to-speech settings.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 8.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun VoiceRow(label: String, detail: String?, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RadioButton(selected = selected, onClick = onClick)
+        Spacer(Modifier.width(8.dp))
+        Column {
+            Text(label, style = MaterialTheme.typography.bodyLarge)
+            if (detail != null) {
+                Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }

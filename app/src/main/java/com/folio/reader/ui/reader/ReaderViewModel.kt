@@ -1,5 +1,6 @@
 package com.folio.reader.ui.reader
 
+import android.os.SystemClock
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.folio.reader.FolioApp
@@ -94,6 +95,9 @@ class ReaderViewModel(private val app: FolioApp, private val bookId: String) : V
     /** For the file on screen: TOC indices of the sections it contains, in reading order. */
     private var sectionToc: List<Int> = emptyList()
     private var saveJob: Job? = null
+    /** For reading stats: when the reader last did something, and the page they were on. */
+    private var lastActivity = 0L
+    private var lastPage: Pair<Int, Int>? = null
 
     init {
         viewModelScope.launch {
@@ -197,6 +201,31 @@ class ReaderViewModel(private val app: FolioApp, private val bookId: String) : V
         }
         updateProgress()
         scheduleSave()
+        val here = _state.value.chapterIndex to page
+        val turned = lastPage != null && lastPage != here
+        lastPage = here
+        recordActivity(if (turned) 1 else 0)
+    }
+
+    /**
+     * Counts reading time as the gaps between page turns (and read-aloud ticks), each capped
+     * so a book left open on the table doesn't count as hours of reading.
+     */
+    fun recordActivity(pages: Int = 0) {
+        val now = SystemClock.elapsedRealtime()
+        val seconds = if (lastActivity == 0L) 0L else ((now - lastActivity) / 1000).coerceAtMost(180)
+        lastActivity = now
+        app.stats.record(bookId, seconds, pages)
+    }
+
+    fun resumeActivity() {
+        lastActivity = SystemClock.elapsedRealtime()
+    }
+
+    /** The app went to the background: count up to now, then stop the clock. */
+    fun pauseActivity() {
+        if (lastActivity != 0L) recordActivity()
+        lastActivity = 0L
     }
 
     /** The bookmark on the page being shown, if there is one. */

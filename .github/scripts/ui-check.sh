@@ -77,7 +77,7 @@ done
 
 # Bookmarks and read-aloud, on the first chapter of the story (file 3).
 # Taps controls by their accessibility label, read from a UI dump.
-tap_label() {
+find_label() {
   adb shell uiautomator dump /sdcard/ui.xml > /dev/null 2>&1 || true
   adb shell cat /sdcard/ui.xml > ui.xml 2>/dev/null || true
   local xy
@@ -95,6 +95,11 @@ for node in re.findall(r'<node [^>]*>', xml):
         break
 PY
 )
+  echo "$xy"
+}
+tap_label() {
+  local xy
+  xy=$(find_label "$@")
   if [ -n "$xy" ]; then adb shell input tap $xy; else echo "no control labelled '$1'" | tee -a "$OUT/tts.txt"; fi
   sleep 2
 }
@@ -112,6 +117,11 @@ sleep 4
 adb exec-out screencap -p > "$OUT/9-reading-aloud.png"
 sleep 8
 adb exec-out screencap -p > "$OUT/9-reading-aloud-later.png"
+tap_label "Voice and sleep timer"
+adb exec-out screencap -p > "$OUT/9-read-aloud-options.png"
+tap_label "30 min"
+adb shell input keyevent KEYCODE_BACK; sleep 2
+adb exec-out screencap -p > "$OUT/9-sleep-timer.png"
 tap_label "Stop reading aloud"
 adb shell input tap $((W / 2)) $((H / 2)); sleep 2
 tap_label "Contents"
@@ -150,6 +160,23 @@ tap_label "Highlights"
 adb exec-out screencap -p > "$OUT/17-highlights-list.png"
 adb shell input keyevent KEYCODE_BACK; sleep 1
 adb shell run-as $PKG cat files/library.json > "$OUT/library.json" || true
+
+# Library: reading stats, and putting a book in a collection.
+adb shell input keyevent KEYCODE_BACK; sleep 3
+tap_label "Reading stats"
+adb exec-out screencap -p > "$OUT/18-stats.png"
+adb shell input keyevent KEYCODE_BACK; sleep 2
+# (Searching hides the "Continue reading" row, so the first match is the book's cover.)
+tap_label "Search titles and authors"
+adb shell input text "Crime"; sleep 1
+adb shell input keyevent KEYCODE_BACK; sleep 1
+xy=$(find_label "Crime and Punishment")
+if [ -n "$xy" ]; then long_press $xy; fi
+tap_label "Collections"
+adb shell input text "Classics"; sleep 1
+tap_label "Save"
+adb exec-out screencap -p > "$OUT/19-collection.png"
+adb shell run-as $PKG cat files/stats.json > "$OUT/stats.json" || true
 
 adb shell dumpsys package com.svox.pico > /dev/null 2>&1 && echo "pico present" >> "$OUT/tts.txt"
 adb shell settings get secure tts_default_synth >> "$OUT/tts.txt" 2>&1 || true

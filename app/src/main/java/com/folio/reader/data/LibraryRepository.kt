@@ -127,6 +127,8 @@ data class Book(
     val bookmarks: List<Bookmark> = emptyList(),
     /** Highlights and notes, in reading order. */
     val highlights: List<Highlight> = emptyList(),
+    /** Names of the reader's own collections this book is in. */
+    val collections: List<String> = emptyList(),
 ) {
     fun toJson(): JSONObject = JSONObject()
         .put("id", id)
@@ -141,6 +143,7 @@ data class Book(
         .put("chapterOffset", chapterOffset.toDouble())
         .put("bookmarks", JSONArray().apply { bookmarks.forEach { put(it.toJson()) } })
         .put("highlights", JSONArray().apply { highlights.forEach { put(it.toJson()) } })
+        .put("collections", JSONArray(collections))
 
     companion object {
         fun fromJson(o: JSONObject) = Book(
@@ -160,6 +163,7 @@ data class Book(
             highlights = o.optJSONArray("highlights")?.let { a ->
                 List(a.length()) { Highlight.fromJson(a.getJSONObject(it)) }
             }.orEmpty(),
+            collections = o.optJSONArray("collections")?.let { a -> List(a.length()) { a.getString(it) } }.orEmpty(),
         )
     }
 }
@@ -247,6 +251,9 @@ class LibraryRepository(private val context: Context) {
 
     suspend fun removeHighlight(id: String, highlightId: String) =
         update(id) { book -> book.copy(highlights = book.highlights.filterNot { it.id == highlightId }) }
+
+    suspend fun setCollections(id: String, names: List<String>) =
+        update(id) { it.copy(collections = names.map { n -> n.trim() }.filter { n -> n.isNotEmpty() }.distinct()) }
 
     suspend fun resetProgress(id: String) =
         update(id) { it.copy(chapterIndex = 0, chapterOffset = 0f, progress = 0f, lastOpenedAt = 0L) }

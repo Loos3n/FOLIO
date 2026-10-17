@@ -5,6 +5,7 @@ import android.os.Handler
 import android.os.Looper
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.speech.tts.Voice
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -43,12 +44,53 @@ class ReadAloud(
     private var language: Locale? = null
 
     private val tts: TextToSpeech = TextToSpeech(context.applicationContext) { status -> onInit(status) }
+    private var voiceName: String? = null
+
+    /** A voice the reader can pick, with a readable name. */
+    data class VoiceOption(val name: String, val label: String, val network: Boolean)
+
+    /** Installed voices for the book's language (all languages if it has none), best first. */
+    fun voices(): List<VoiceOption> {
+        if (!ready) return emptyList()
+        val all = runCatching { tts.voices }.getOrNull().orEmpty()
+            .filter { TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED !in it.features }
+        val lang = language?.language
+        val matching = all.filter { lang == null || it.locale.language == lang }.ifEmpty { all }
+        val sorted = matching.sortedWith(
+            compareBy<Voice>({ it.isNetworkConnectionRequired }, { it.locale.displayName }, { -it.quality }, { it.name }),
+        )
+        val counts = HashMap<String, Int>()
+        return sorted.map { v ->
+            val place = v.locale.displayName
+            val n = (counts[place] ?: 0) + 1
+            counts[place] = n
+            VoiceOption(v.name, "$place · voice $n", v.isNetworkConnectionRequired)
+        }
+    }
+
+    /** Uses the named voice from the next sentence on (null for the default). */
+    fun setVoice(name: String?) {
+        voiceName = name
+        if (!ready) return
+        applyVoice()
+        if (active && !paused) {
+            run++
+            speak(index)
+        }
+    }
+
+    private fun applyVoice() {
+        val name = voiceName
+        val voice = name?.let { n -> runCatching { tts.voices }.getOrNull()?.firstOrNull { it.name == n } }
+        if (voice != null) runCatching { tts.voice = voice }
+        else language?.let { runCatching { tts.setLanguage(it) } }
+    }
 
     private fun onInit(status: Int) {
         main.post {
             if (status == TextToSpeech.SUCCESS) {
                 ready = true
-                language?.let { runCatching { tts.setLanguage(it) } }
+                applyVoice()
                 pendingStart?.invoke()
             } else {
                 available = false
@@ -91,7 +133,7 @@ class ReadAloud(
     fun setLanguage(tag: String?) {
         val locale = tag?.takeIf { it.isNotBlank() }?.let { Locale.forLanguageTag(it) } ?: return
         language = locale
-        if (ready) runCatching { tts.setLanguage(locale) }
+        if (ready) applyVoice()
     }
 
     /** Starts reading [texts] from the first sentence. */

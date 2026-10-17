@@ -31,6 +31,11 @@ data class ReaderSettings(
     val justify: Boolean = false,
     /** Volume up/down turn pages while reading. */
     val volumeKeys: Boolean = false,
+    /** Read-aloud speed (1 = normal) and voice name; null voice = the engine's default. */
+    val speechRate: Float = 1f,
+    val voice: String? = null,
+    /** How the library grid is ordered (a SortOrder name). */
+    val librarySort: String = "Recent",
 ) {
     fun resolvedTheme(systemDark: Boolean): ReaderTheme =
         theme ?: if (systemDark) ReaderTheme.Dark else ReaderTheme.Light
@@ -53,6 +58,9 @@ class SettingsRepository(context: Context) {
             .putString("font", next.font.name)
             .putBoolean("justify", next.justify)
             .putBoolean("volumeKeysTurnPages", next.volumeKeys)
+            .putFloat("speechRate", next.speechRate)
+            .putString("voice", next.voice)
+            .putString("librarySort", next.librarySort)
             .apply()
     }
 
@@ -66,6 +74,9 @@ class SettingsRepository(context: Context) {
             font = prefs.getString("font", null)?.let { n -> ReaderFont.entries.firstOrNull { it.name == n } } ?: d.font,
             justify = prefs.getBoolean("justify", d.justify),
             volumeKeys = prefs.getBoolean("volumeKeysTurnPages", d.volumeKeys),
+            speechRate = prefs.getFloat("speechRate", d.speechRate),
+            voice = prefs.getString("voice", null),
+            librarySort = prefs.getString("librarySort", null) ?: d.librarySort,
         )
     }
 }

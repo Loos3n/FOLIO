@@ -64,6 +64,7 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -89,6 +90,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -111,7 +113,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
@@ -221,16 +225,53 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
     // Read-aloud: the phone's voice reads from the top of the page, highlighting as it goes.
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    // Sleep timer: stop at a set time, or when the chapter being read ends.
+    var sleepEndsAt by remember { mutableStateOf<Long?>(null) }
+    var sleepAtChapterEnd by remember { mutableStateOf(false) }
+    var showReadAloudSheet by remember { mutableStateOf(false) }
     val readAloud = remember {
         lateinit var self: ReadAloud
         ReadAloud(
             context,
             onSentence = { i -> webView?.evaluateJavascript("window.folio && folio.ttsMark($i,-1,-1)", null) },
             onWord = { i, start, end -> webView?.evaluateJavascript("window.folio && folio.ttsMark($i,$start,$end)", null) },
-            onFinished = { if (vm.hasNextChapter()) vm.nextChapter() else self.stop() },
-        ).also { self = it }
+            onFinished = {
+                if (sleepAtChapterEnd) {
+                    sleepAtChapterEnd = false
+                    self.stop()
+                    webView?.evaluateJavascript("window.folio && folio.ttsStop()", null)
+                } else if (vm.hasNextChapter()) {
+                    vm.nextChapter()
+                } else {
+                    self.stop()
+                }
+            },
+        ).also {
+            self = it
+            it.rate = settings.speechRate
+        }
     }
     DisposableEffect(readAloud) { onDispose { readAloud.shutdown() } }
+    LaunchedEffect(settings.voice) { readAloud.setVoice(settings.voice) }
+    LaunchedEffect(readAloud.rate) {
+        if (readAloud.rate != settings.speechRate) vm.updateSettings { it.copy(speechRate = readAloud.rate) }
+    }
+    // Listening counts as reading time too.
+    LaunchedEffect(readAloud.active, readAloud.paused) {
+        while (readAloud.active && !readAloud.paused) {
+            delay(15_000)
+            vm.recordActivity()
+        }
+    }
+    LifecycleEventEffect(Lifecycle.Event.ON_START) { vm.resumeActivity() }
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { vm.pauseActivity() }
+    // The timer is for this listening session only.
+    LaunchedEffect(readAloud.active) {
+        if (!readAloud.active) {
+            sleepEndsAt = null
+            sleepAtChapterEnd = false
+        }
+    }
     var readingRequest by remember { mutableStateOf<ChapterRequest?>(null) }
     var pausedAt by remember { mutableStateOf<Pair<ChapterRequest?, Int>?>(null) }
     var restartJob by remember { mutableStateOf<Job?>(null) }
@@ -270,6 +311,20 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
         }
     }
 
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(sleepEndsAt) {
+        val end = sleepEndsAt ?: return@LaunchedEffect
+        while (true) {
+            now = System.currentTimeMillis()
+            if (now >= end) {
+                sleepEndsAt = null
+                if (readAloud.active && !readAloud.paused) togglePause()
+                break
+            }
+            delay(1_000)
+        }
+    }
+
     // A new chapter (or a jump) while reading: pick up from the top of the new page.
     LaunchedEffect(request, state.chapterReady) {
         if (readAloud.active && !readAloud.paused && state.chapterReady && request != null && request !== readingRequest) {
@@ -302,7 +357,9 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
 
     // Volume buttons turn pages while the book is open.
     val currentSettings by rememberUpdatedState(settings)
-    val sheetsOpen by rememberUpdatedState(showToc || showSettings || showSearch || editing != null || defineTerm != null)
+    val sheetsOpen by rememberUpdatedState(
+        showToc || showSettings || showSearch || showReadAloudSheet || editing != null || defineTerm != null,
+    )
     DisposableEffect(Unit) {
         PageKeys.handler = PageKeys.Handler(
             // Never while reading aloud: then the buttons should set the volume.
@@ -423,8 +480,15 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
                     .windowInsetsPadding(WindowInsets.systemBarsIgnoringVisibility.only(WindowInsetsSides.Bottom))
                     .padding(bottom = 36.dp),
             ) {
+                val left = sleepEndsAt?.let { ((it - now) / 1000).coerceAtLeast(0) }
                 ReadAloudBar(
                     paused = readAloud.paused,
+                    sleepLabel = when {
+                        left != null -> "Stops in %d:%02d".format(left / 60, left % 60)
+                        sleepAtChapterEnd -> "Stops at chapter end"
+                        else -> null
+                    },
+                    onMore = { showReadAloudSheet = true },
                     rate = readAloud.rate,
                     onPause = ::togglePause,
                     onRate = {
@@ -525,6 +589,23 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
                     editing = null
                 },
                 onDismiss = { editing = null },
+            )
+        }
+        if (showReadAloudSheet) {
+            ReadAloudSheet(
+                voices = remember { readAloud.voices() },
+                voice = settings.voice,
+                rate = readAloud.rate,
+                sleepMinutes = sleepEndsAt?.let { ((it - now + 59_999) / 60_000).toInt() },
+                sleepAtChapterEnd = sleepAtChapterEnd,
+                onVoice = { name -> vm.updateSettings { it.copy(voice = name) } },
+                onRate = { readAloud.rate = it },
+                onSleep = { minutes, chapterEnd ->
+                    sleepAtChapterEnd = chapterEnd
+                    sleepEndsAt = minutes?.let { System.currentTimeMillis() + it * 60_000L }
+                    now = System.currentTimeMillis()
+                },
+                onDismiss = { showReadAloudSheet = false },
             )
         }
         defineTerm?.let { term ->
@@ -738,6 +819,8 @@ private fun ReaderTopBar(
 @Composable
 private fun ReadAloudBar(
     paused: Boolean,
+    sleepLabel: String?,
+    onMore: () -> Unit,
     rate: Float,
     onPause: () -> Unit,
     onRate: () -> Unit,
@@ -756,7 +839,7 @@ private fun ReadAloudBar(
                 )
             }
             Text(
-                if (paused) "Paused" else "Reading aloud",
+                if (paused) "Paused" else sleepLabel ?: "Reading aloud",
                 style = MaterialTheme.typography.labelLarge,
                 modifier = Modifier.padding(horizontal = 10.dp),
             )
@@ -771,6 +854,9 @@ private fun ReadAloudBar(
                     style = MaterialTheme.typography.labelLarge,
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                 )
+            }
+            IconButton(onClick = onMore) {
+                Icon(Icons.Filled.MoreVert, contentDescription = "Voice and sleep timer")
             }
             IconButton(onClick = onStop) {
                 Icon(Icons.Filled.Close, contentDescription = "Stop reading aloud")
