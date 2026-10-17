@@ -85,7 +85,7 @@ find_label() {
   adb shell cat /sdcard/ui.xml > ui.xml 2>/dev/null || true
   xy=$(python3 - "$1" "${2:-}" <<'PY'
 import html, re, sys
-label = sys.argv[1].encode().decode('unicode_escape')
+label = sys.argv[1]
 contains = sys.argv[2] == 'contains'
 xml = open('ui.xml', encoding='utf-8', errors='ignore').read()
 for node in re.findall(r'<node [^>]*>', xml):
@@ -157,7 +157,7 @@ adb shell input text "A%snote%sabout%sthis"; sleep 1
 adb shell input keyevent KEYCODE_BACK; sleep 1   # hide the keyboard
 tap_label "Done"
 sleep 2
-long_press $((W * 55 / 100)) $((H * 62 / 100))
+long_press $((W * 35 / 100)) $((H / 2))
 adb exec-out screencap -p > "$OUT/14-define-menu.png"
 tap_menu 2
 sleep 4
@@ -170,6 +170,7 @@ adb shell input tap $((W / 2)) $((H / 2)); sleep 2
 tap_label "Search in book"
 adb shell input text "landlady"; sleep 6
 adb exec-out screencap -p > "$OUT/15-search.png"
+adb shell input keyevent KEYCODE_BACK; sleep 1   # hide the keyboard
 tap_label "·" contains
 sleep 4
 adb exec-out screencap -p > "$OUT/16-search-result.png"
