@@ -15,6 +15,7 @@ curl -fsSL --retry 3 -o book.epub https://www.gutenberg.org/cache/epub/2554/pg25
 adb push book.epub /data/local/tmp/book.epub
 
 # First launch creates the app's data directory.
+adb shell settings put secure immersive_mode_confirmations confirmed || true
 adb shell am start -W -n $PKG/.MainActivity
 sleep 5
 adb exec-out screencap -p > "$OUT/0-library-empty.png"

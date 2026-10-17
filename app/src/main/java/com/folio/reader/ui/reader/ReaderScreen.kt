@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
 import android.view.View
+import android.view.ViewGroup
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
@@ -332,6 +333,9 @@ private fun BookWebView(
 
     val webView = remember {
         WebView(context).apply {
+            // Without explicit MATCH_PARENT params Compose adds the view as WRAP_CONTENT, and
+            // WebView then sizes its viewport to the content, so 100vh (and the pages) break.
+            layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
             setBackgroundColor(theme.background.toInt())
             isVerticalScrollBarEnabled = false
             isHorizontalScrollBarEnabled = false
