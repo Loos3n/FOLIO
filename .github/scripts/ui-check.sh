@@ -14,6 +14,10 @@ ESPEAK=com.reecedunn.espeak
 code=$(curl -fsSL "https://f-droid.org/api/v1/packages/$ESPEAK" | python3 -c 'import json,sys; print(json.load(sys.stdin)["suggestedVersionCode"])' || true)
 if [ -n "$code" ] && curl -fsSL --retry 3 -o espeak.apk "https://f-droid.org/repo/${ESPEAK}_${code}.apk"; then
   adb install -r espeak.apk && adb shell settings put secure tts_default_synth $ESPEAK || true
+  # eSpeak unpacks its voice data the first time its own screen opens.
+  adb shell am start -W -n $ESPEAK/.DownloadVoiceData || true
+  sleep 15
+  adb shell input keyevent KEYCODE_BACK; sleep 1
 else
   echo "Couldn't fetch eSpeak NG; read-aloud won't be testable"
 fi
@@ -90,7 +94,7 @@ for node in re.findall(r'<node [^>]*>', xml):
         break
 PY
 )
-  if [ -n "$xy" ]; then adb shell input tap $xy; else echo "no control labelled '$1'"; fi
+  if [ -n "$xy" ]; then adb shell input tap $xy; else echo "no control labelled '$1'" | tee -a "$OUT/tts.txt"; fi
   sleep 2
 }
 adb shell am force-stop $PKG
@@ -102,7 +106,6 @@ swipe_next
 adb shell input tap $((W / 2)) $((H / 2)); sleep 2
 tap_label "Bookmark this page"
 adb exec-out screencap -p > "$OUT/8-bookmark-added.png"
-adb shell input tap $((W / 2)) $((H / 2)); sleep 2
 tap_label "Read aloud"
 sleep 4
 adb exec-out screencap -p > "$OUT/9-reading-aloud.png"
