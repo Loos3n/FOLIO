@@ -150,6 +150,11 @@ object ReaderContent {
             // Read-aloud: the sentence being spoken, and the word within it.
             append("::highlight(folio-sentence){background-color:${link}26;}")
             append("::highlight(folio-word){background-color:${link}66;}")
+            // Fallback boxes (see highlight() in the script); box-shadow because backgrounds are cleared above.
+            append(".folio-mark{position:absolute;left:0;top:0;z-index:-1;pointer-events:none;}")
+            append(".folio-mark div{position:absolute;border-radius:3px;}")
+            append(".folio-sentence div{box-shadow:inset 0 0 0 999px ${link}26;}")
+            append(".folio-word div{box-shadow:inset 0 0 0 999px ${link}66;}")
             // .folio-p marks the book's ordinary body paragraphs (not centred or right-aligned ones),
             // so the justify setting applies both ways without flattening title pages.
             if (settings.justify) append(".folio-p{text-align:justify !important;text-align-last:start;}")
@@ -488,9 +493,31 @@ object ReaderContent {
             return r;
           }
           var tts = null;
+          var marks = {};
           function highlight(name, range) {
-            if (!(window.CSS && CSS.highlights && window.Highlight)) return;
-            if (range) CSS.highlights.set(name, new Highlight(range)); else CSS.highlights.delete(name);
+            if (window.CSS && CSS.highlights && window.Highlight) {
+              if (range) CSS.highlights.set(name, new Highlight(range)); else CSS.highlights.delete(name);
+              return;
+            }
+            // Older WebViews (before Chrome 105) lack CSS highlights: draw boxes behind the text instead.
+            var box = marks[name];
+            if (!box) {
+              box = document.createElement('div');
+              box.className = 'folio-mark ' + name;
+              document.body.appendChild(box);
+              marks[name] = box;
+            }
+            box.innerHTML = '';
+            if (!range) return;
+            var b = document.body.getBoundingClientRect(), rs = range.getClientRects();
+            for (var k = 0; k < rs.length; k++) {
+              var d = document.createElement('div');
+              d.style.left = (rs[k].left - b.left) + 'px';
+              d.style.top = (rs[k].top - b.top) + 'px';
+              d.style.width = rs[k].width + 'px';
+              d.style.height = rs[k].height + 'px';
+              box.appendChild(d);
+            }
           }
           function userTurned() { if (tts && bridge && bridge.onManualTurn) bridge.onManualTurn(); }
 
