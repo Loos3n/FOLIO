@@ -147,7 +147,10 @@ object ReaderContent {
             append("hr{margin:1.5em 20% !important;border:0 !important;border-top:1px solid ${fg}40 !important;height:0 !important;}")
             append("pre{white-space:pre-wrap !important;}")
             append("::selection{background:${link}55;}")
-            if (settings.justify) append("body p{text-align:justify !important;text-align-last:start;}")
+            // .folio-p marks the book's ordinary body paragraphs (not centred or right-aligned ones),
+            // so the justify setting applies both ways without flattening title pages.
+            if (settings.justify) append(".folio-p{text-align:justify !important;text-align-last:start;}")
+            else append(".folio-p{text-align:start !important;}")
             settings.font.css?.let { family ->
                 append("body,body *:not(pre):not(code):not(kbd):not(samp){font-family:$family !important;}")
             }
@@ -231,6 +234,16 @@ object ReaderContent {
             if (params.l && !root.getAttribute('lang')) root.setAttribute('lang', params.l);
             // Paragraphs with no first-line indent and no space between them read as one block.
             var ps = document.body.getElementsByTagName('p'), plain = 0, sampled = 0;
+            // Read each paragraph's own alignment with our stylesheet switched off.
+            var own = document.getElementById('folio-style');
+            if (own) own.disabled = true;
+            var body = [];
+            for (var k = 0; k < ps.length; k++) {
+              var a = getComputedStyle(ps[k]).textAlign;
+              if (a !== 'center' && a !== 'right' && a !== '-webkit-center' && a !== 'end') body.push(ps[k]);
+            }
+            if (own) own.disabled = false;
+            for (var b = 0; b < body.length; b++) body[b].classList.add('folio-p');
             for (var i = 0; i < ps.length && sampled < 40; i++) {
               if ((ps[i].textContent || '').length < 60) continue;
               sampled++;
