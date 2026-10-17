@@ -237,10 +237,18 @@ object ReaderContent {
             // Read each paragraph's own alignment with our stylesheet switched off.
             var own = document.getElementById('folio-style');
             if (own) own.disabled = true;
+            // Paragraph-like blocks: every <p>, plus <div>s that hold running text directly.
+            var blocks = Array.prototype.slice.call(ps);
+            var divs = document.body.getElementsByTagName('div');
+            for (var d = 0; d < divs.length; d++) {
+              for (var n = divs[d].firstChild; n; n = n.nextSibling) {
+                if (n.nodeType === 3 && n.nodeValue.trim().length > 40) { blocks.push(divs[d]); break; }
+              }
+            }
             var body = [];
-            for (var k = 0; k < ps.length; k++) {
-              var a = getComputedStyle(ps[k]).textAlign;
-              if (a !== 'center' && a !== 'right' && a !== '-webkit-center' && a !== 'end') body.push(ps[k]);
+            for (var k = 0; k < blocks.length; k++) {
+              var a = getComputedStyle(blocks[k]).textAlign;
+              if (a !== 'center' && a !== 'right' && a !== '-webkit-center' && a !== 'end') body.push(blocks[k]);
             }
             if (own) own.disabled = false;
             for (var b = 0; b < body.length; b++) body[b].classList.add('folio-p');

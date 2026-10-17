@@ -48,6 +48,19 @@ adb shell input keyevent KEYCODE_BACK; sleep 2
 adb shell input keyevent KEYCODE_BACK; sleep 3
 adb exec-out screencap -p > "$OUT/6-library.png"
 
+# Open a few files further in, where the story text starts.
+unzip -l book.epub > "$OUT/book-files.txt" || true
+for idx in 2 3 4; do
+  adb shell am force-stop $PKG
+  printf '[{"id":"test","title":"Crime and Punishment","author":"Fyodor Dostoyevsky","fileName":"test.epub","coverFileName":null,"addedAt":1,"lastOpenedAt":0,"progress":0,"chapterIndex":%d,"chapterOffset":0}]' "$idx" \
+    | adb exec-in run-as $PKG sh -c 'cat > files/library.json'
+  adb shell am start -W -n $PKG/.MainActivity --es open_book test
+  sleep 8
+  adb exec-out screencap -p > "$OUT/7-file-$idx.png"
+  swipe_next
+  adb exec-out screencap -p > "$OUT/7-file-$idx-next.png"
+done
+
 adb logcat -d > "$OUT/logcat.txt"
 grep -iE "chromium|console|folio|AndroidRuntime" "$OUT/logcat.txt" > "$OUT/logcat-relevant.txt" || true
 exit 0
