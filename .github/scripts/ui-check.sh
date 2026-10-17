@@ -87,14 +87,17 @@ find_label() {
 import html, re, sys
 label = sys.argv[1]
 contains = sys.argv[2] == 'contains'
+nth = int(sys.argv[2][4:]) if sys.argv[2].startswith('nth:') else 0
+hits = []
 xml = open('ui.xml', encoding='utf-8', errors='ignore').read()
 for node in re.findall(r'<node [^>]*>', xml):
     desc = html.unescape(re.search(r'content-desc="([^"]*)"', node).group(1))
     text = html.unescape(re.search(r' text="([^"]*)"', node).group(1))
     if (label in desc or label in text) if contains else (desc.startswith(label) or text.startswith(label)):
         x1, y1, x2, y2 = map(int, re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', node).groups())
-        print((x1 + x2) // 2, (y1 + y2) // 2)
-        break
+        hits.append(((x1 + x2) // 2, (y1 + y2) // 2))
+if -len(hits) <= nth < len(hits):
+    print(*hits[nth])
 PY
 )
   [ -n "$xy" ] && break
@@ -186,13 +189,13 @@ adb shell input keyevent KEYCODE_BACK; sleep 3
 tap_label "Reading stats"
 adb exec-out screencap -p > "$OUT/18-stats.png"
 adb shell input keyevent KEYCODE_BACK; sleep 2
-# (Searching hides the "Continue reading" row, so the first match is the book's cover.)
-tap_label "Search titles and authors"
-adb shell input text "Crime"; sleep 1
-adb shell input keyevent KEYCODE_BACK; sleep 1
-xy=$(find_label "Crime and Punishment")
+# The title appears on the "Continue reading" card and on the grid tile's cover and caption;
+# the second-to-last is the tile's cover, which is what opens the menu.
+tap_label "All"
+xy=$(find_label "Crime and Punishment" nth:-2)
 if [ -n "$xy" ]; then long_press $xy; fi
 tap_label "Collections"
+tap_label "New collection"
 adb shell input text "Classics"; sleep 1
 tap_label "Save"
 adb exec-out screencap -p > "$OUT/19-collection.png"
