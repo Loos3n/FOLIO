@@ -648,6 +648,7 @@ object ReaderContent {
           }
           // Splits the text from a starting point to the end of the file into sentences,
           // remembering which text nodes each one came from so spoken words can be found again.
+          var ABBREV = /(^|[\s(])([A-Z]|Mr|Mrs|Ms|Dr|St|Mt|Jr|Sr|Prof|Rev|Capt|Col|Gen|Lt|Sgt|No|vs|etc|viz|cf)$/;
           function buildChunks(start) {
             var chunks = [], cur = null, block = null, n = start.node, first = true;
             var w = textWalker(start.node);
@@ -662,7 +663,12 @@ object ReaderContent {
                 if (!cur) cur = { text: '', segs: [] };
                 var re = /[.!?\u2026]+["'\u201D\u2019)\]]*(\s+|$)/g;
                 re.lastIndex = i;
-                var m = re.exec(v);
+                var m;
+                // Not a sentence end: a full stop after an initial or a title ("S. Place",
+                // "Mr. Smith"), or one followed by a lower-case word. Splitting there would
+                // make the voice pause and drop its pitch mid-sentence.
+                while ((m = re.exec(v)) && m[0].charAt(0) === '.' && m[0].length > 1 &&
+                       (ABBREV.test(v.slice(Math.max(0, m.index - 6), m.index)) || /^[a-z]/.test(v.slice(m.index + m[0].length)))) {}
                 var end = m ? m.index + m[0].length : v.length;
                 cur.segs.push({ node: n, start: i, end: end, at: cur.text.length });
                 cur.text += v.slice(i, end);
