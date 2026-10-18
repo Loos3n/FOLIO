@@ -184,6 +184,34 @@ adb exec-out screencap -p > "$OUT/17-highlights-list.png"
 adb shell input keyevent KEYCODE_BACK; sleep 1
 adb shell run-as $PKG cat files/library.json > "$OUT/library.json" || true
 
+# Scrolling mode: switch with one tap, scroll, the reading ruler, auto-scroll, and back.
+adb shell input tap $((W / 2)) $((H / 2)); sleep 2
+tap_label "Switch to scrolling"
+sleep 3
+adb exec-out screencap -p > "$OUT/20-scroll.png"
+adb shell input swipe $((W / 2)) $((H * 3 / 4)) $((W / 2)) $((H / 4)) 400; sleep 2
+adb exec-out screencap -p > "$OUT/21-scrolled.png"
+adb shell input tap $((W / 2)) $((H / 2)); sleep 2
+adb exec-out screencap -p > "$OUT/22-scroll-controls.png"
+tap_label "Display"
+tap_label "Reading ruler"
+adb exec-out screencap -p > "$OUT/23-display-layout.png"
+adb shell input keyevent KEYCODE_BACK; sleep 2
+tap_label "Auto-scroll"
+sleep 6
+adb exec-out screencap -p > "$OUT/24-autoscroll.png"
+tap_label "Stop auto-scroll"
+# Fling through to the end of the chapter: the next one should follow on.
+for i in $(seq 1 40); do adb shell input swipe $((W / 2)) $((H * 4 / 5)) $((W / 2)) $((H / 5)) 60; done
+sleep 3
+adb exec-out screencap -p > "$OUT/25-scroll-far.png"
+adb shell input tap $((W / 2)) $((H / 2)); sleep 2
+tap_label "Switch to pages"
+sleep 3
+adb exec-out screencap -p > "$OUT/26-pages-again.png"
+adb shell run-as $PKG cat files/library.json > "$OUT/library-scroll.json" || true
+adb shell run-as $PKG cat shared_prefs/reader_settings.xml > "$OUT/settings.xml" || true
+
 # Library: reading stats, and putting a book in a collection.
 adb shell input keyevent KEYCODE_BACK; sleep 3
 tap_label "Reading stats"

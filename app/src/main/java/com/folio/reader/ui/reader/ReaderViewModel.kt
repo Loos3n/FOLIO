@@ -57,6 +57,8 @@ data class ReaderUiState(
     val sectionEnd: Int = 0,
     /** False while a chapter is being loaded and laid out. */
     val chapterReady: Boolean = false,
+    /** Characters left in the table-of-contents chapter from the top of the screen. */
+    val charsLeft: Int = 0,
 )
 
 class ReaderViewModel(private val app: FolioApp, private val bookId: String) : ViewModel() {
@@ -83,6 +85,12 @@ class ReaderViewModel(private val app: FolioApp, private val bookId: String) : V
     private var searchJob: Job? = null
     private val plainTexts = ConcurrentHashMap<Int, String>()
 
+    /** Whether this book is read by scrolling rather than in pages. */
+    private val _scrollMode = MutableStateFlow(
+        library.get(bookId)?.scrollMode ?: app.settings.settings.value.scrollDefault,
+    )
+    val scrollMode: StateFlow<Boolean> = _scrollMode.asStateFlow()
+
     private val _request = MutableStateFlow<ChapterRequest?>(null)
     val request: StateFlow<ChapterRequest?> = _request.asStateFlow()
 
@@ -98,6 +106,8 @@ class ReaderViewModel(private val app: FolioApp, private val bookId: String) : V
     /** For reading stats: when the reader last did something, and the page they were on. */
     private var lastActivity = 0L
     private var lastPage: Pair<Int, Int>? = null
+    /** For learning reading speed: a recent place in the text and when the reader was there. */
+    private var speedMark: Triple<Int, Int, Long>? = null
 
     init {
         viewModelScope.launch {
@@ -135,9 +145,31 @@ class ReaderViewModel(private val app: FolioApp, private val bookId: String) : V
         val epub = book
         val sections = epub?.toc.orEmpty().filter { it.path == path }.map { it.fragment.orEmpty() }
         if (req != null && epub != null && epub.spine.getOrNull(req.index)?.path == path) {
-            return ChapterStart(req.offset, req.fragment, epub.language, sections, req.charOffset, req.find, req.findIndex)
+            val scroll = _scrollMode.value
+            return ChapterStart(
+                req.offset, req.fragment, epub.language, sections, req.charOffset, req.find, req.findIndex,
+                scroll = scroll,
+                nextTitle = if (scroll) nextTitle(epub, req.index) else null,
+            )
         }
-        return ChapterStart(0f, null, epub?.language, sections)
+        return ChapterStart(0f, null, epub?.language, sections, scroll = _scrollMode.value)
+    }
+
+    /** What comes after chapter [index], to label the end of it in scrolling mode; null at the end of the book. */
+    private fun nextTitle(epub: EpubBook, index: Int): String? {
+        if (index >= epub.spine.lastIndex) return null
+        val nextPath = epub.spine[index + 1].path
+        // A file with no contents entry of its own carries on the chapter before it.
+        return epub.toc.firstOrNull { it.path == nextPath }?.title?.takeIf { it.isNotBlank() } ?: "Continue"
+    }
+
+    /** Switches between pages and scrolling for this book, staying at the same place. New books follow the last choice. */
+    fun setScrollMode(scroll: Boolean) {
+        if (_scrollMode.value == scroll) return
+        _scrollMode.value = scroll
+        app.settings.update { it.copy(scrollDefault = scroll) }
+        app.appScope.launch { library.setScrollMode(bookId, scroll) }
+        if (book != null && _request.value != null) show(_state.value.chapterIndex, chapterOffset, null)
     }
 
     /** Re-issues the current position, e.g. for a freshly created WebView after rotation. */
@@ -185,7 +217,8 @@ class ReaderViewModel(private val app: FolioApp, private val bookId: String) : V
     }
 
     /** Called from the page whenever the reader lands on a page. */
-    fun onPage(page: Int, count: Int, offset: Float, section: Int, sectionEnd: Int) {
+    fun onPage(info: PageInfo) {
+        val (page, count, offset, section, sectionEnd) = info
         chapterOffset = offset
         val epub = book
         val tocIndex = sectionToc.getOrNull(section) ?: epub?.let { tocIndexBefore(it, _state.value.chapterIndex) } ?: -1
@@ -197,14 +230,38 @@ class ReaderViewModel(private val app: FolioApp, private val bookId: String) : V
                 chapterReady = true,
                 currentTocIndex = tocIndex,
                 chapterTitle = epub?.toc?.getOrNull(tocIndex)?.title ?: it.chapterTitle,
+                charsLeft = info.charsLeft,
             )
         }
+        learnSpeed(_state.value.chapterIndex, info.charAt)
         updateProgress()
         scheduleSave()
         val here = _state.value.chapterIndex to page
         val turned = lastPage != null && lastPage != here
         lastPage = here
         recordActivity(if (turned) 1 else 0)
+    }
+
+    /**
+     * Learns how fast the reader reads, from how far through the text they get over time,
+     * skipping jumps (links, the contents, seeking) and long breaks.
+     */
+    private fun learnSpeed(chapter: Int, charAt: Int) {
+        val now = SystemClock.elapsedRealtime()
+        val mark = speedMark
+        if (mark == null || mark.first != chapter || charAt < mark.second - 50 || now - mark.third > 600_000) {
+            speedMark = Triple(chapter, charAt, now)
+            return
+        }
+        val seconds = (now - mark.third) / 1000f
+        if (seconds < 20f) return
+        val rate = (charAt - mark.second) / seconds * 60f
+        speedMark = Triple(chapter, charAt, now)
+        if (rate < 150f || rate > 5000f) return // skimming, or not reading at all
+        app.settings.update {
+            val old = it.charsPerMinute
+            it.copy(charsPerMinute = if (old <= 0f) rate else old * 0.8f + rate * 0.2f)
+        }
     }
 
     /**

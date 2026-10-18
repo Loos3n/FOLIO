@@ -36,6 +36,14 @@ data class ReaderSettings(
     val voice: String? = null,
     /** How the library grid is ordered (a SortOrder name). */
     val librarySort: String = "Recent",
+    /** Books open by scrolling rather than in pages, unless a book says otherwise. */
+    val scrollDefault: Boolean = false,
+    /** Scrolling mode: a band that marks the reading line. */
+    val ruler: Boolean = false,
+    /** Auto-scroll speed in screen pixels (dp) a second. */
+    val autoScrollSpeed: Float = 40f,
+    /** The reader's measured reading speed, for "minutes left"; 0 until learned. */
+    val charsPerMinute: Float = 0f,
 ) {
     fun resolvedTheme(systemDark: Boolean): ReaderTheme =
         theme ?: if (systemDark) ReaderTheme.Dark else ReaderTheme.Light
@@ -61,6 +69,10 @@ class SettingsRepository(context: Context) {
             .putFloat("speechRate", next.speechRate)
             .putString("voice", next.voice)
             .putString("librarySort", next.librarySort)
+            .putBoolean("scrollDefault", next.scrollDefault)
+            .putBoolean("ruler", next.ruler)
+            .putFloat("autoScrollSpeed", next.autoScrollSpeed)
+            .putFloat("charsPerMinute", next.charsPerMinute)
             .apply()
     }
 
@@ -77,6 +89,10 @@ class SettingsRepository(context: Context) {
             speechRate = prefs.getFloat("speechRate", d.speechRate),
             voice = prefs.getString("voice", null),
             librarySort = prefs.getString("librarySort", null) ?: d.librarySort,
+            scrollDefault = prefs.getBoolean("scrollDefault", d.scrollDefault),
+            ruler = prefs.getBoolean("ruler", d.ruler),
+            autoScrollSpeed = prefs.getFloat("autoScrollSpeed", d.autoScrollSpeed),
+            charsPerMinute = prefs.getFloat("charsPerMinute", d.charsPerMinute),
         )
     }
 }

@@ -49,6 +49,9 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.systemBarsIgnoringVisibility
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -71,6 +74,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.IconButton
@@ -151,6 +155,7 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
     val state by vm.state.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle()
     val request by vm.request.collectAsStateWithLifecycle()
+    val scrollMode by vm.scrollMode.collectAsStateWithLifecycle()
 
     val theme = settings.resolvedTheme(isSystemInDarkTheme())
     val chrome = when (theme) {
@@ -272,12 +277,21 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
             sleepAtChapterEnd = false
         }
     }
+    // Auto-scroll (scrolling mode only): the page moves on by itself, paused while the
+    // controls or a sheet are open. Read-aloud and auto-scroll each stop the other.
+    var autoScrolling by remember { mutableStateOf(false) }
+    var autoPaused by remember { mutableStateOf(false) }
+    LaunchedEffect(scrollMode) { if (!scrollMode) autoScrolling = false }
+    LaunchedEffect(readAloud.active) { if (readAloud.active) autoScrolling = false }
+    LaunchedEffect(autoScrolling) { autoPaused = false }
+
     var readingRequest by remember { mutableStateOf<ChapterRequest?>(null) }
     var pausedAt by remember { mutableStateOf<Pair<ChapterRequest?, Int>?>(null) }
     var restartJob by remember { mutableStateOf<Job?>(null) }
 
     fun startReading() {
         val wv = webView ?: return
+        autoScrolling = false
         readingRequest = request
         readAloud.setLanguage(vm.language)
         wv.evaluateJavascript("window.folio ? folio.ttsStart() : null") { json ->
@@ -360,6 +374,11 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
     val sheetsOpen by rememberUpdatedState(
         showToc || showSettings || showSearch || showReadAloudSheet || editing != null || defineTerm != null,
     )
+    // Tell each newly laid-out chapter how fast to move (0 = stand still).
+    val autoSpeed = if (autoScrolling && !autoPaused && !controlsVisible && !sheetsOpen && state.chapterReady) settings.autoScrollSpeed else 0f
+    LaunchedEffect(autoSpeed, request, state.chapterReady, webView) {
+        webView?.evaluateJavascript("window.folio && folio.autoScroll && folio.autoScroll($autoSpeed)", null)
+    }
     DisposableEffect(Unit) {
         PageKeys.handler = PageKeys.Handler(
             // Never while reading aloud: then the buttons should set the volume.
@@ -386,6 +405,7 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
                     request = request,
                     prefs = settings,
                     theme = theme,
+                    scroll = scrollMode,
                     onTap = onTap,
                     onManualTurn = onManualTurn,
                     onSelection = ::onSelection,
@@ -396,6 +416,20 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
                         }
                     },
                     onCreated = { webView = it },
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .windowInsetsPadding(WindowInsets.systemBarsIgnoringVisibility.union(WindowInsets.displayCutout))
+                        .padding(top = 30.dp, bottom = 30.dp),
+                )
+            }
+
+            // Reading ruler (scrolling mode): a clear band to read in, with the text above and
+            // below it softly dimmed. It takes no touches, so the page scrolls underneath.
+            if (scrollMode && settings.ruler && !state.loading && state.error == null) {
+                ReadingRuler(
+                    color = Color(theme.background),
+                    accent = Color(theme.link),
+                    lineHeightDp = 16f * settings.textZoom / 100f * settings.lineHeight,
                     modifier = Modifier
                         .fillMaxSize()
                         .windowInsetsPadding(WindowInsets.systemBarsIgnoringVisibility.union(WindowInsets.displayCutout))
@@ -444,7 +478,7 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
                         .padding(horizontal = 24.dp, vertical = 8.dp),
                 ) {
                     Text(
-                        pagesLeftLabel(state),
+                        if (scrollMode) timeLeftLabel(state, settings.charsPerMinute) else pagesLeftLabel(state),
                         style = MaterialTheme.typography.labelSmall,
                         color = inkColor.copy(alpha = 0.5f),
                         modifier = Modifier.weight(1f),
@@ -500,6 +534,29 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
             }
 
             AnimatedVisibility(
+                visible = autoScrolling && !controlsVisible,
+                enter = slideInVertically { it } + fadeIn(),
+                exit = slideOutVertically { it } + fadeOut(),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .windowInsetsPadding(WindowInsets.systemBarsIgnoringVisibility.only(WindowInsetsSides.Bottom))
+                    .padding(bottom = 36.dp),
+            ) {
+                AutoScrollBar(
+                    paused = autoPaused,
+                    speed = settings.autoScrollSpeed,
+                    onPause = { autoPaused = !autoPaused },
+                    onSpeed = { faster ->
+                        vm.updateSettings {
+                            val next = if (faster) it.autoScrollSpeed * 1.25f else it.autoScrollSpeed / 1.25f
+                            it.copy(autoScrollSpeed = next.coerceIn(AUTO_MIN, AUTO_MAX))
+                        }
+                    },
+                    onStop = { autoScrolling = false },
+                )
+            }
+
+            AnimatedVisibility(
                 visible = controlsVisible && state.error == null,
                 enter = slideInVertically { -it } + fadeIn(),
                 exit = slideOutVertically { -it } + fadeOut(),
@@ -528,6 +585,19 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
             ) {
                 ReaderBottomPanel(
                     state = state,
+                    scrollMode = scrollMode,
+                    timeLeft = timeLeftLabel(state, settings.charsPerMinute),
+                    onLayout = { vm.setScrollMode(!scrollMode) },
+                    autoScrolling = autoScrolling,
+                    onAutoScroll = {
+                        if (autoScrolling) {
+                            autoScrolling = false
+                        } else {
+                            if (readAloud.active) stopReading()
+                            autoScrolling = true
+                            controlsVisible = false
+                        }
+                    },
                     onSeek = vm::seekTo,
                     onPrev = vm::prevChapter,
                     onNext = vm::nextChapter,
@@ -622,10 +692,30 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
         if (showSettings) {
             SettingsSheet(
                 settings = settings,
+                scrollMode = scrollMode,
+                onScrollMode = vm::setScrollMode,
                 onChange = vm::updateSettings,
                 onDismiss = { showSettings = false },
             )
         }
+    }
+}
+
+private const val AUTO_MIN = 8f
+private const val AUTO_MAX = 240f
+
+/** Reading speed to assume until the reader's own is learned: about 200 words a minute. */
+private const val DEFAULT_CHARS_PER_MINUTE = 1000f
+
+private fun timeLeftLabel(state: ReaderUiState, charsPerMinute: Float): String {
+    if (!state.chapterReady) return ""
+    val cpm = if (charsPerMinute > 0f) charsPerMinute else DEFAULT_CHARS_PER_MINUTE
+    val minutes = (state.charsLeft / cpm).roundToInt()
+    return when {
+        state.charsLeft <= 0 -> "End of chapter"
+        minutes < 1 -> "Under a minute left in chapter"
+        minutes < 60 -> "$minutes min left in chapter"
+        else -> "${minutes / 60} h ${minutes % 60} min left in chapter"
     }
 }
 
@@ -645,6 +735,7 @@ private fun BookWebView(
     request: ChapterRequest?,
     prefs: ReaderSettings,
     theme: ReaderTheme,
+    scroll: Boolean,
     onTap: (Int) -> Unit,
     onManualTurn: () -> Unit,
     onSelection: (action: Int, json: String) -> Unit,
@@ -656,7 +747,7 @@ private fun BookWebView(
     val currentOnManualTurn = rememberUpdatedState(onManualTurn)
     val currentOnSelection = rememberUpdatedState(onSelection)
     val currentOnHighlightTap = rememberUpdatedState(onHighlightTap)
-    val css = remember(prefs, theme) { ReaderContent.css(prefs, theme) }
+    val css = remember(prefs, theme, scroll) { ReaderContent.css(prefs, theme, scroll) }
     val currentCss = rememberUpdatedState(css)
     val currentOnTap = rememberUpdatedState(onTap)
 
@@ -685,8 +776,8 @@ private fun BookWebView(
             val assets = context.assets
             addJavascriptInterface(
                 ReaderBridge(
-                    pageChanged = { p, c, o, s, e -> view.post { vm.onPage(p, c, o, s, e) } },
-                    loaded = { p, c, o, s, e -> view.post { vm.onPage(p, c, o, s, e) } },
+                    pageChanged = { info -> view.post { vm.onPage(info) } },
+                    loaded = { info -> view.post { vm.onPage(info) } },
                     tapped = { zone -> view.post { currentOnTap.value(zone) } },
                     nextRequested = { vm.hasNextChapter().also { if (it) view.post { vm.nextChapter() } } },
                     prevRequested = { vm.hasPrevChapter().also { if (it) view.post { vm.prevChapter() } } },
@@ -739,8 +830,15 @@ private fun BookWebView(
         webView.loadUrl(ReaderContent.urlFor(path))
     }
 
+    // Restyle the page in place, except when switching between pages and scrolling: then
+    // the chapter is reloaded in the new layout instead.
+    var styledScroll by remember { mutableStateOf(scroll) }
     LaunchedEffect(css) {
         webView.setBackgroundColor(theme.background.toInt())
+        if (styledScroll != scroll) {
+            styledScroll = scroll
+            return@LaunchedEffect
+        }
         webView.evaluateJavascript("window.folio && folio.setStyle(${ReaderContent.jsString(css)})", null)
     }
 
@@ -866,8 +964,74 @@ private fun ReadAloudBar(
 }
 
 @Composable
+private fun AutoScrollBar(
+    paused: Boolean,
+    speed: Float,
+    onPause: () -> Unit,
+    onSpeed: (faster: Boolean) -> Unit,
+    onStop: () -> Unit,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = CircleShape,
+        shadowElevation = 6.dp,
+    ) {
+        Row(Modifier.padding(horizontal = 6.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            FilledTonalIconButton(onClick = onPause) {
+                Icon(
+                    if (paused) ReaderIcons.Play else ReaderIcons.Pause,
+                    contentDescription = if (paused) "Resume auto-scroll" else "Pause auto-scroll",
+                )
+            }
+            Text(
+                if (paused) "Paused" else "Auto-scroll",
+                style = MaterialTheme.typography.labelLarge,
+                modifier = Modifier.padding(horizontal = 10.dp),
+            )
+            IconButton(onClick = { onSpeed(false) }, enabled = speed > AUTO_MIN + 0.01f) {
+                Text("\u2212", style = MaterialTheme.typography.titleLarge)
+            }
+            Text(
+                // Shown as a 1-to-10ish scale rather than pixels.
+                (speed / 4f).roundToInt().let { if (it % 10 == 0) "${it / 10}" else "${it / 10}.${it % 10}" } + "\u00D7",
+                style = MaterialTheme.typography.labelLarge,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.width(44.dp),
+            )
+            IconButton(onClick = { onSpeed(true) }, enabled = speed < AUTO_MAX - 0.01f) {
+                Text("+", style = MaterialTheme.typography.titleLarge)
+            }
+            IconButton(onClick = onStop) {
+                Icon(Icons.Filled.Close, contentDescription = "Stop auto-scroll")
+            }
+        }
+    }
+}
+
+/** A band to read in: the text above and below it is dimmed with the page colour. */
+@Composable
+private fun ReadingRuler(color: Color, accent: Color, lineHeightDp: Float, modifier: Modifier = Modifier) {
+    Canvas(modifier) {
+        val band = (lineHeightDp * 2.2f).dp.toPx()
+        val top = size.height * 0.3f
+        val dim = color.copy(alpha = 0.6f)
+        drawRect(dim, topLeft = Offset.Zero, size = Size(size.width, top))
+        drawRect(dim, topLeft = Offset(0f, top + band), size = Size(size.width, size.height - top - band))
+        drawRect(accent.copy(alpha = 0.07f), topLeft = Offset(0f, top), size = Size(size.width, band))
+        val edge = 1.dp.toPx()
+        drawRect(accent.copy(alpha = 0.35f), topLeft = Offset(0f, top - edge), size = Size(size.width, edge))
+        drawRect(accent.copy(alpha = 0.35f), topLeft = Offset(0f, top + band), size = Size(size.width, edge))
+    }
+}
+
+@Composable
 private fun ReaderBottomPanel(
     state: ReaderUiState,
+    scrollMode: Boolean,
+    timeLeft: String,
+    onLayout: () -> Unit,
+    autoScrolling: Boolean,
+    onAutoScroll: () -> Unit,
     onSeek: (Float) -> Unit,
     onPrev: () -> Unit,
     onNext: () -> Unit,
@@ -899,7 +1063,7 @@ private fun ReaderBottomPanel(
                     )
                     if (state.pageCount > 0) {
                         Text(
-                            pagesLeftLabel(state),
+                            if (scrollMode) timeLeft else listOf(pagesLeftLabel(state), timeLeft).filter { it.isNotEmpty() }.joinToString(" \u00B7 "),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -935,7 +1099,7 @@ private fun ReaderBottomPanel(
                 }
             }
             Spacer(Modifier.height(4.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 FilledTonalButton(onClick = onContents, modifier = Modifier.weight(1f)) {
                     Icon(Icons.AutoMirrored.Filled.List, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
@@ -945,6 +1109,28 @@ private fun ReaderBottomPanel(
                     Text("Aa", fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.width(8.dp))
                     Text("Display")
+                }
+                // One tap between turning pages and scrolling; remembered for this book.
+                FilledTonalIconButton(onClick = onLayout) {
+                    Icon(
+                        if (scrollMode) ReaderIcons.Pages else ReaderIcons.Scroll,
+                        contentDescription = if (scrollMode) "Switch to pages" else "Switch to scrolling",
+                    )
+                }
+                if (scrollMode) {
+                    FilledTonalIconButton(
+                        onClick = onAutoScroll,
+                        colors = if (autoScrolling) {
+                            IconButtonDefaults.filledTonalIconButtonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary,
+                            )
+                        } else {
+                            IconButtonDefaults.filledTonalIconButtonColors()
+                        },
+                    ) {
+                        Icon(ReaderIcons.AutoScroll, contentDescription = if (autoScrolling) "Stop auto-scroll" else "Auto-scroll")
+                    }
                 }
             }
         }
@@ -1115,6 +1301,8 @@ private fun BookmarkList(
 @Composable
 private fun SettingsSheet(
     settings: ReaderSettings,
+    scrollMode: Boolean,
+    onScrollMode: (Boolean) -> Unit,
     onChange: ((ReaderSettings) -> ReaderSettings) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -1128,6 +1316,20 @@ private fun SettingsSheet(
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Text("Display", style = MaterialTheme.typography.headlineSmall)
+
+            SectionLabel("Layout")
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                listOf("Pages" to false, "Scrolling" to true).forEachIndexed { i, (label, value) ->
+                    SegmentedButton(
+                        selected = scrollMode == value,
+                        onClick = { onScrollMode(value) },
+                        shape = SegmentedButtonDefaults.itemShape(i, 2),
+                    ) { Text(label) }
+                }
+            }
+            if (scrollMode) {
+                SwitchRow("Reading ruler", settings.ruler) { on -> onChange { it.copy(ruler = on) } }
+            }
 
             SectionLabel("Theme")
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {

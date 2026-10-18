@@ -31,6 +31,10 @@ data class ChapterStart(
     /** A search pattern and which match of it in this file to open at and mark. */
     val find: String? = null,
     val findIndex: Int = 0,
+    /** Lay the chapter out as one long scrolling column instead of pages. */
+    val scroll: Boolean = false,
+    /** The next chapter's title, shown past the end of this one in scrolling mode (null at the end of the book). */
+    val nextTitle: String? = null,
 )
 
 object ReaderContent {
@@ -90,6 +94,10 @@ object ReaderContent {
             }
             if (start.charOffset != null) append("&amp;c=").append(start.charOffset)
             if (start.find != null) append("&amp;q=").append(Uri.encode(start.find)).append("&amp;n=").append(start.findIndex)
+            if (start.scroll) {
+                append("&amp;m=s")
+                if (start.nextTitle != null) append("&amp;nt=").append(Uri.encode(start.nextTitle))
+            }
         }
         // Valid in both HTML and XHTML documents (no '<' or '&' inside the CSS).
         val tags = "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1, user-scalable=no\"/>" +
@@ -114,7 +122,7 @@ object ReaderContent {
         append("@font-face{font-family:'Folio Atkinson';src:url('${f}atkinson-bold.ttf');font-weight:700;}")
     }
 
-    fun css(settings: ReaderSettings, theme: ReaderTheme): String {
+    fun css(settings: ReaderSettings, theme: ReaderTheme, scroll: Boolean = false): String {
         val bg = hex(theme.background)
         val fg = hex(theme.text)
         val link = hex(theme.link)
@@ -122,17 +130,29 @@ object ReaderContent {
         val lh = String.format(Locale.US, "%.2f", settings.lineHeight)
         return buildString {
             append(FONT_FACES)
-            // Paged layout: the body flows into columns exactly one screen wide, and the
-            // script moves between them. --folio-w is set by the script to the real viewport width.
-            append("html{margin:0 !important;padding:0 ${m}px !important;height:100vh !important;width:auto !important;")
-            append("max-width:none !important;box-sizing:border-box !important;overflow:hidden !important;")
-            append("background:$bg !important;color:$fg !important;}")
-            append("body{margin:0 !important;padding:0 !important;height:100vh !important;width:auto !important;")
-            append("max-width:none !important;box-sizing:border-box !important;background:$bg !important;color:$fg !important;")
-            append("-webkit-column-width:calc(var(--folio-w,100vw) - ${2 * m}px) !important;column-width:calc(var(--folio-w,100vw) - ${2 * m}px) !important;")
-            append("-webkit-column-gap:${2 * m}px !important;column-gap:${2 * m}px !important;column-fill:auto !important;")
-            append("line-height:$lh !important;overflow-wrap:break-word;-webkit-hyphens:auto;hyphens:auto;")
-            append("-webkit-tap-highlight-color:transparent;will-change:transform;}")
+            if (scroll) {
+                // Scrolling layout: one long column that the WebView scrolls natively.
+                append("html{margin:0 !important;padding:0 ${m}px !important;height:auto !important;width:auto !important;")
+                append("max-width:none !important;box-sizing:border-box !important;overflow-x:hidden !important;")
+                append("background:$bg !important;color:$fg !important;}")
+                append("body{margin:0 !important;padding:5vh 0 0 !important;height:auto !important;width:auto !important;")
+                append("max-width:none !important;box-sizing:border-box !important;background:$bg !important;color:$fg !important;")
+                append("position:relative !important;-webkit-columns:auto !important;columns:auto !important;transform:none !important;")
+                append("line-height:$lh !important;overflow-wrap:break-word;-webkit-hyphens:auto;hyphens:auto;")
+                append("-webkit-tap-highlight-color:transparent;}")
+            } else {
+                // Paged layout: the body flows into columns exactly one screen wide, and the
+                // script moves between them. --folio-w is set by the script to the real viewport width.
+                append("html{margin:0 !important;padding:0 ${m}px !important;height:100vh !important;width:auto !important;")
+                append("max-width:none !important;box-sizing:border-box !important;overflow:hidden !important;")
+                append("background:$bg !important;color:$fg !important;}")
+                append("body{margin:0 !important;padding:0 !important;height:100vh !important;width:auto !important;")
+                append("max-width:none !important;box-sizing:border-box !important;background:$bg !important;color:$fg !important;")
+                append("-webkit-column-width:calc(var(--folio-w,100vw) - ${2 * m}px) !important;column-width:calc(var(--folio-w,100vw) - ${2 * m}px) !important;")
+                append("-webkit-column-gap:${2 * m}px !important;column-gap:${2 * m}px !important;column-fill:auto !important;")
+                append("line-height:$lh !important;overflow-wrap:break-word;-webkit-hyphens:auto;hyphens:auto;")
+                append("-webkit-tap-highlight-color:transparent;will-change:transform;}")
+            }
             append("body *{color:inherit !important;background-color:transparent !important;border-color:${fg}33 !important;}")
             append("body p,body li,body blockquote,body div,body span,body dd,body dt,body td{line-height:inherit !important;}")
             append("a[href],a[href] *{color:$link !important;text-decoration:none !important;}")
@@ -148,6 +168,18 @@ object ReaderContent {
             // Chapter openings start on a fresh page (the script marks which headings qualify).
             append(".folio-break{break-before:column !important;-webkit-column-break-before:always !important;margin-top:18vh !important;}")
             append(".folio-break-first{margin-top:18vh !important;}")
+            if (scroll) {
+                // No pages to start fresh on; a chapter heading just gets some space above it.
+                append(".folio-break{break-before:auto !important;-webkit-column-break-before:auto !important;margin-top:3em !important;}")
+                append(".folio-break-first{margin-top:6vh !important;}")
+                append("img,video,svg{max-height:80vh !important;}")
+                // Past the end of the chapter: a screen of room, labelled with what comes next.
+                append("#folio-next{height:100vh;margin:0;padding-top:12vh;box-sizing:border-box;text-align:center;}")
+                append("#folio-next::before{display:block;white-space:pre-line;line-height:1.5;opacity:.6;font-size:.9em;letter-spacing:.04em;}")
+                append("#folio-next.folio-more::before{content:'NEXT' '\\A' attr(data-label);}")
+                append("#folio-next.folio-end::before{content:'The end';}")
+                append("#folio-next::after{content:'';display:block;width:40px;margin:1.2em auto 0;border-top:1px solid ${fg}40;}")
+            }
             // Books whose paragraphs have neither indent nor spacing run together; give them
             // the usual book treatment of indenting every paragraph after the first.
             append(".folio-indent p{margin-top:0 !important;margin-bottom:0 !important;}")
@@ -209,6 +241,9 @@ object ReaderContent {
           var fragment = params.f || '';
           var sections = params.s ? params.s.split(',').map(decodeURIComponent) : [];
           var target = null; // a text range to open at (search match or highlight), until shown
+          // Scrolling mode: the chapter is one long column read top to bottom, and a "page"
+          // is a screen's height of it. Otherwise it's laid out as side-by-side pages.
+          var scrollMode = params.m === 's';
           var bridge = window.FolioBridge;
           var root = document.documentElement;
           var page = 0;
@@ -217,38 +252,60 @@ object ReaderContent {
           var curX = 0;
 
           function width() { return window.innerWidth || root.clientWidth || 0; }
+          function height() { return window.innerHeight || root.clientHeight || 0; }
           function setWidthVar() { root.style.setProperty('--folio-w', width() + 'px'); }
+          // Scrolling mode: where the chapter's text ends (the "next chapter" spacer starts),
+          // and the furthest it's read to: its last line near the bottom of the screen.
+          function textEnd() {
+            var spacer = document.getElementById('folio-next');
+            return spacer ? spacer.offsetTop : (document.body ? document.body.scrollHeight : 0);
+          }
+          function readMax() { return Math.max(0, textEnd() - height() * 0.9); }
           function pageCount() {
             var body = document.body;
             if (!body || width() < 10) return 1;
+            if (scrollMode) return Math.max(1, Math.ceil(readMax() / Math.max(1, height())) + 1);
             return Math.max(1, Math.round((body.scrollWidth + 2 * parseFloat(getComputedStyle(root).paddingLeft || '0')) / width()));
           }
           function lastPage() { return pageCount() - 1; }
           function offset() {
+            if (scrollMode) { var m = readMax(); return m <= 0 ? 1 : Math.max(0, Math.min(1, window.scrollY / m)); }
             var n = pageCount();
             return n <= 1 ? 1 : page / (n - 1);
           }
+          function scrollPage() { return Math.max(0, Math.min(lastPage(), Math.round(window.scrollY / Math.max(1, height())))); }
           var leaving = false; // set once we've asked for another chapter; this page is done reporting
           // Which table-of-contents section the current page is in, and its last page.
           function pageOfElement(el) {
-            return Math.max(0, Math.floor((el.getBoundingClientRect().left + curX + 1) / width()));
+            var r = el.getBoundingClientRect();
+            if (scrollMode) return Math.max(0, Math.floor((r.top + window.scrollY + height() * 0.3) / Math.max(1, height())));
+            return Math.max(0, Math.floor((r.left + curX + 1) / width()));
           }
           function sectionInfo() {
-            var current = -1, end = lastPage();
+            var current = -1, end = lastPage(), next = null;
             for (var i = 0; i < sections.length; i++) {
               var id = sections[i];
               var el = id ? (document.getElementById(id) || document.getElementsByName(id)[0]) : null;
               var p = id ? (el ? pageOfElement(el) : -1) : 0;
               if (p < 0) continue;
               if (p <= page) current = i;
-              else { end = Math.min(end, p - 1); break; }
+              else { end = Math.min(end, p - 1); next = el; break; }
             }
-            return [current, end];
+            return [current, end, next];
+          }
+          // How many characters of the current section are left from the top of this page,
+          // and where the page starts; the app turns these into "minutes left".
+          function progressChars(next) {
+            var st = textStart();
+            if (!st) return [0, buildIndex().total];
+            var at = offsetOf(st.node, st.offset);
+            var end = next ? offsetOf(next, 0) : buildIndex().total;
+            return [Math.max(0, end - at), at];
           }
           function report() {
             if (!bridge || !ready || leaving) return;
-            var s = sectionInfo();
-            bridge.onPage(page, pageCount(), offset(), s[0], s[1]);
+            var s = sectionInfo(), c = progressChars(s[2]);
+            bridge.onPage(page, pageCount(), offset(), s[0], s[1], c[0], c[1]);
           }
 
           // One-time tidy-up of the book's own formatting, before the first layout.
@@ -299,6 +356,15 @@ object ReaderContent {
               else if (!prev) h.classList.add('folio-break-first');
               prev = h;
             }
+            if (scrollMode) {
+              // Room past the end of the text: scrolling into it carries on to the next chapter.
+              // (Its label is drawn by CSS, so it adds no text to the chapter.)
+              var spacer = document.createElement('div');
+              spacer.id = 'folio-next';
+              spacer.setAttribute('data-label', params.nt || '');
+              spacer.className = params.nt ? 'folio-more' : 'folio-end';
+              document.body.appendChild(spacer);
+            }
           }
           // Pages are moved with a GPU transform rather than scrolling: smoother, and immune
           // to scroll-extent quirks at the last page.
@@ -307,8 +373,14 @@ object ReaderContent {
             if (document.body) document.body.style.transform = 'translate3d(' + (-x) + 'px,0,0)';
           }
 
+          function scrollToY(y, animate) {
+            y = Math.max(0, y);
+            window.scrollTo({ top: y, behavior: animate ? 'smooth' : 'auto' });
+            if (!animate) { page = scrollPage(); report(); }
+          }
           function show(p, animate) {
             p = Math.max(0, Math.min(lastPage(), p));
+            if (scrollMode) { scrollToY(p * height(), animate); return; }
             page = p;
             var target = p * width();
             if (anim) { cancelAnimationFrame(anim); anim = null; }
@@ -335,6 +407,14 @@ object ReaderContent {
           function restore() {
             prepare();
             setWidthVar();
+            if (scrollMode) {
+              var y = -1, el = fragment && (document.getElementById(fragment) || document.getElementsByName(fragment)[0]);
+              if (el) y = el.getBoundingClientRect().top + window.scrollY - height() * 0.05;
+              if (y < 0 && pageOfTarget() >= 0) y = target.getClientRects()[0].top + window.scrollY - height() * 0.3;
+              if (y < 0) y = start * readMax();
+              scrollToY(Math.min(y, readMax()), false);
+              return;
+            }
             var p = pageOfFragment();
             if (p < 0) p = pageOfTarget();
             if (p < 0) p = Math.round(start * lastPage());
@@ -354,8 +434,9 @@ object ReaderContent {
               target = null;
               ready = true;
               drawHighlights();
-              var s = sectionInfo();
-              if (bridge) bridge.onReady(page, pageCount(), offset(), s[0], s[1]);
+              var s = sectionInfo(), c = progressChars(s[2]);
+              if (bridge) bridge.onReady(page, pageCount(), offset(), s[0], s[1], c[0], c[1]);
+              if (auto.speed) startAuto();
             });
           }
           document.addEventListener('DOMContentLoaded', function () { if (hasSize()) restore(); });
@@ -364,20 +445,84 @@ object ReaderContent {
             if (!ready) { finishLoad(); return; }
             var o = offset();
             setWidthVar();
-            requestAnimationFrame(function () { show(Math.round(o * lastPage()), false); drawHighlights(); });
+            requestAnimationFrame(function () {
+              if (scrollMode) scrollToY(o * readMax(), false); else show(Math.round(o * lastPage()), false);
+              drawHighlights();
+            });
           });
+
+          // Scrolling mode: keep the app posted, and carry on into the next chapter once the
+          // reader scrolls past the end of this one.
+          var reportTimer = null, atEnd = false;
+          window.addEventListener('scroll', function () {
+            if (!scrollMode || !ready || leaving) return;
+            page = scrollPage();
+            var end = textEnd();
+            if (window.scrollY >= end - height() * 0.15 && end > 0) {
+              if (!atEnd) {
+                atEnd = true;
+                if (bridge && bridge.nextChapter()) { leaving = true; return; }
+              }
+            } else {
+              atEnd = false;
+            }
+            clearTimeout(reportTimer);
+            reportTimer = setTimeout(report, 150);
+          }, { passive: true });
+
+          // Scrolling mode: auto-scroll at a steady speed, held while a finger is down.
+          var auto = { speed: 0, raf: null, last: 0, acc: 0, held: false, resumeAt: 0 };
+          function autoStep(t) {
+            if (!auto.speed) { auto.raf = null; return; }
+            var dt = auto.last ? Math.min(100, t - auto.last) : 0;
+            auto.last = t;
+            if (!auto.held && t >= auto.resumeAt && ready && !leaving) {
+              auto.acc += auto.speed * dt / 1000;
+              var whole = Math.floor(auto.acc);
+              if (whole > 0) { window.scrollBy(0, whole); auto.acc -= whole; }
+            }
+            auto.raf = requestAnimationFrame(autoStep);
+          }
+          function startAuto() {
+            auto.last = 0;
+            if (auto.speed && !auto.raf) auto.raf = requestAnimationFrame(autoStep);
+          }
 
           // Swipe between pages. The page follows the finger, then settles.
           var sx = 0, sy = 0, sScroll = 0, st = 0, axis = null, moved = false;
+          var startY = 0, pulled = false;
           function hasSelection() { return String(window.getSelection() || '').length > 0; }
+          // Scrolling mode uses the WebView's own scrolling; these only watch for a pull
+          // down at the very top (back to the previous chapter) and for auto-scroll holds.
           document.addEventListener('touchstart', function (e) {
+            if (!scrollMode) return;
+            auto.held = true;
+            sy = e.touches[0] ? e.touches[0].clientY : 0;
+            startY = window.scrollY;
+            pulled = false;
+          }, { passive: true });
+          document.addEventListener('touchmove', function (e) {
+            if (!scrollMode || pulled || !e.touches[0]) return;
+            if (window.scrollY <= 0 && startY <= 0 && e.touches[0].clientY - sy > height() * 0.12) {
+              pulled = true;
+              folio.prev();
+            }
+          }, { passive: true });
+          document.addEventListener('touchend', function () {
+            if (!scrollMode) return;
+            auto.held = false;
+            auto.resumeAt = performance.now() + 1200;
+            if (Math.abs(window.scrollY - startY) > height() / 3) userTurned();
+          });
+          document.addEventListener('touchstart', function (e) {
+            if (scrollMode) return;
             if (e.touches.length !== 1 || hasSelection()) { axis = 'none'; return; }
             if (anim) { cancelAnimationFrame(anim); anim = null; }
             sx = e.touches[0].clientX; sy = e.touches[0].clientY;
             sScroll = page * width(); st = Date.now(); axis = null; moved = false;
           }, { passive: true });
           document.addEventListener('touchmove', function (e) {
-            if (axis === 'none' || e.touches.length !== 1) return;
+            if (scrollMode || axis === 'none' || e.touches.length !== 1) return;
             var dx = e.touches[0].clientX - sx, dy = e.touches[0].clientY - sy;
             if (axis === null) {
               if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
@@ -393,6 +538,7 @@ object ReaderContent {
             setScroll(x);
           }, { passive: false });
           document.addEventListener('touchend', function (e) {
+            if (scrollMode) return;
             if (axis !== 'x') { axis = null; return; }
             axis = null;
             var dx = (e.changedTouches[0] ? e.changedTouches[0].clientX : sx) - sx;
@@ -402,7 +548,11 @@ object ReaderContent {
             else if (dx > threshold || v > 0.35) folio.prev();
             else show(page, true);
           });
-          document.addEventListener('touchcancel', function () { if (axis === 'x') show(page, true); axis = null; });
+          document.addEventListener('touchcancel', function () {
+            if (scrollMode) { auto.held = false; return; }
+            if (axis === 'x') show(page, true);
+            axis = null;
+          });
 
           document.addEventListener('click', function (e) {
             if (moved) { moved = false; return; }
@@ -444,32 +594,53 @@ object ReaderContent {
           }
           // The first word of text on the page being shown. (Found from layout boxes rather
           // than hit-testing, which ignores the page transform in some WebViews.)
-          function pageOfRect(r) { return Math.floor((r.left + curX + 1) / width()); }
-          function charPage(n, o) {
+          function pageOfRect(r) {
+            if (scrollMode) return Math.floor((r.top + window.scrollY + 1) / Math.max(1, height()));
+            return Math.floor((r.left + curX + 1) / width());
+          }
+          // Whether a box is on an earlier page (paged) or above the screen (scrolling).
+          function before(r) { return scrollMode ? r.bottom <= 1 : pageOfRect(r) < page; }
+          function charBefore(n, o) {
             var rg = document.createRange();
             rg.setStart(n, o); rg.setEnd(n, Math.min(o + 1, n.nodeValue.length));
             var rs = rg.getClientRects();
-            return rs.length ? pageOfRect(rs[0]) : -1;
+            return rs.length ? before(rs[0]) : true;
+          }
+          function nodeRects(n) {
+            var rg = document.createRange();
+            rg.selectNodeContents(n);
+            return rg.getClientRects();
           }
           function textStart() {
-            var w = textWalker(null), n, rg = document.createRange();
-            while ((n = w.nextNode())) {
-              var v = n.nodeValue;
+            // Text runs in reading order, so binary-search for the first node that reaches
+            // this page, then look at nodes one by one from there.
+            var list = buildIndex().list, lo = 0, hi = list.length;
+            while (lo < hi) {
+              var mid = (lo + hi) >> 1, k = mid, rs = null;
+              for (; k < hi; k++) {
+                if (!list[k].node.nodeValue.trim()) continue;
+                rs = nodeRects(list[k].node);
+                if (rs.length) break;
+              }
+              if (k >= hi) { hi = mid; continue; }
+              if (before(rs[rs.length - 1])) lo = k + 1; else hi = mid;
+            }
+            for (var i = lo; i < list.length; i++) {
+              var n = list[i].node, v = n.nodeValue;
               if (!v.trim()) continue;
-              rg.selectNodeContents(n);
-              var rects = rg.getClientRects();
-              if (!rects.length || pageOfRect(rects[rects.length - 1]) < page) continue;
+              var rects = nodeRects(n);
+              if (!rects.length || before(rects[rects.length - 1])) continue;
               var o = 0;
-              if (pageOfRect(rects[0]) < page) {
+              if (before(rects[0])) {
                 // This node starts on an earlier page: find its first character on this one.
-                var lo = 0, hi = v.length - 1;
-                while (lo < hi) {
-                  var mid = (lo + hi) >> 1, cp = charPage(n, mid);
-                  if (cp >= page) hi = mid; else lo = mid + 1;
+                var a = 0, b = v.length - 1;
+                while (a < b) {
+                  var m = (a + b) >> 1;
+                  if (!charBefore(n, m)) b = m; else a = m + 1;
                 }
-                o = lo;
+                o = a;
                 while (o > 0 && !/\s/.test(v.charAt(o - 1))) o--;
-                if (charPage(n, o) < page) { while (o < v.length && !/\s/.test(v.charAt(o))) o++; while (o < v.length && /\s/.test(v.charAt(o))) o++; }
+                if (charBefore(n, o)) { while (o < v.length && !/\s/.test(v.charAt(o))) o++; while (o < v.length && /\s/.test(v.charAt(o))) o++; }
               }
               return { node: n, offset: o };
             }
@@ -654,11 +825,21 @@ object ReaderContent {
           var folio = window.folio = {
             next: function () {
               if (leaving) return;
+              if (scrollMode) {
+                if (window.scrollY >= readMax() - 2) { if (bridge && bridge.nextChapter()) leaving = true; }
+                else { scrollToY(window.scrollY + height() * 0.9, true); userTurned(); }
+                return;
+              }
               if (page >= lastPage()) { if (anim) { cancelAnimationFrame(anim); anim = null; } setScroll(page * width()); if (bridge && bridge.nextChapter()) leaving = true; }
               else { show(page + 1, true); userTurned(); }
             },
             prev: function () {
               if (leaving) return;
+              if (scrollMode) {
+                if (window.scrollY <= 2) { if (bridge && bridge.prevChapter()) leaving = true; }
+                else { scrollToY(window.scrollY - height() * 0.9, true); userTurned(); }
+                return;
+              }
               if (page <= 0) { if (anim) { cancelAnimationFrame(anim); anim = null; } setScroll(0); if (bridge && bridge.prevChapter()) leaving = true; }
               else { show(page - 1, true); userTurned(); }
             },
@@ -689,6 +870,12 @@ object ReaderContent {
               var target = word || sentence;
               var rects = target ? target.getClientRects() : [];
               if (rects.length && !anim && !leaving) {
+                if (scrollMode) {
+                  // Keep the spoken line in the upper part of the screen, gliding rather than jumping.
+                  var r = rects[0], h = height();
+                  if (r.top < h * 0.12 || r.bottom > h * 0.7) window.scrollTo({ top: Math.max(0, window.scrollY + r.top - h * 0.3), behavior: 'smooth' });
+                  return;
+                }
                 var p = Math.floor((rects[0].left + curX + 1) / width());
                 if (p !== page) show(p, true);
               }
@@ -728,8 +915,21 @@ object ReaderContent {
               el.textContent = css;
               folio.restoreTo(o);
             },
+            // Scrolling mode: scroll on by itself at this many pixels a second (0 stops).
+            autoScroll: function (pxPerSec) {
+              auto.speed = scrollMode ? Math.max(0, pxPerSec || 0) : 0;
+              auto.acc = 0;
+              if (auto.speed) startAuto();
+            },
             restoreTo: function (o) {
               setWidthVar();
+              if (scrollMode) {
+                requestAnimationFrame(function () {
+                  scrollToY(o * readMax(), false);
+                  setTimeout(function () { scrollToY(o * readMax(), false); drawHighlights(); }, 80);
+                });
+                return;
+              }
               requestAnimationFrame(function () {
                 show(Math.round(o * lastPage()), false);
                 setTimeout(function () { show(Math.round(o * lastPage()), false); drawHighlights(); }, 80);
@@ -742,9 +942,13 @@ object ReaderContent {
 
 /** Calls from the page's JavaScript; these arrive on a WebView background thread. */
 class ReaderBridge(
-    /** [section] indexes the chapter's section ids (-1 before the first); [sectionEnd] is its last page. */
-    private val pageChanged: (page: Int, count: Int, offset: Float, section: Int, sectionEnd: Int) -> Unit,
-    private val loaded: (page: Int, count: Int, offset: Float, section: Int, sectionEnd: Int) -> Unit,
+    /**
+     * [section] indexes the chapter's section ids (-1 before the first); [sectionEnd] is its last page.
+     * [charsLeft] counts the characters from the top of the screen to the end of the section, and
+     * [charAt] is where the screen starts, as a character offset into the chapter.
+     */
+    private val pageChanged: (PageInfo) -> Unit,
+    private val loaded: (PageInfo) -> Unit,
     private val tapped: (zone: Int) -> Unit,
     /** Return whether there is a chapter to move to. */
     private val nextRequested: () -> Boolean,
@@ -754,13 +958,24 @@ class ReaderBridge(
     /** The reader tapped one of their highlights. */
     private val highlightTapped: (id: String) -> Unit = {},
 ) {
-    @JavascriptInterface fun onPage(page: Int, count: Int, offset: Float, section: Int, sectionEnd: Int) =
-        pageChanged(page, count, offset, section, sectionEnd)
-    @JavascriptInterface fun onReady(page: Int, count: Int, offset: Float, section: Int, sectionEnd: Int) =
-        loaded(page, count, offset, section, sectionEnd)
+    @JavascriptInterface fun onPage(page: Int, count: Int, offset: Float, section: Int, sectionEnd: Int, charsLeft: Int, charAt: Int) =
+        pageChanged(PageInfo(page, count, offset, section, sectionEnd, charsLeft, charAt))
+    @JavascriptInterface fun onReady(page: Int, count: Int, offset: Float, section: Int, sectionEnd: Int, charsLeft: Int, charAt: Int) =
+        loaded(PageInfo(page, count, offset, section, sectionEnd, charsLeft, charAt))
     @JavascriptInterface fun onTap(zone: Int) = tapped(zone)
     @JavascriptInterface fun nextChapter(): Boolean = nextRequested()
     @JavascriptInterface fun prevChapter(): Boolean = prevRequested()
     @JavascriptInterface fun onManualTurn() = manualTurn()
     @JavascriptInterface fun onHighlightTap(id: String) = highlightTapped(id)
 }
+
+/** Where the reader is in a chapter, as the page script reports it. */
+data class PageInfo(
+    val page: Int,
+    val count: Int,
+    val offset: Float,
+    val section: Int,
+    val sectionEnd: Int,
+    val charsLeft: Int,
+    val charAt: Int,
+)

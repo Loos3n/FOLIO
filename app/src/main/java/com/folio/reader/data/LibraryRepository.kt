@@ -129,6 +129,8 @@ data class Book(
     val highlights: List<Highlight> = emptyList(),
     /** Names of the reader's own collections this book is in. */
     val collections: List<String> = emptyList(),
+    /** Read by scrolling (true) or in pages (false); null follows the reader's default. */
+    val scrollMode: Boolean? = null,
 ) {
     fun toJson(): JSONObject = JSONObject()
         .put("id", id)
@@ -144,6 +146,7 @@ data class Book(
         .put("bookmarks", JSONArray().apply { bookmarks.forEach { put(it.toJson()) } })
         .put("highlights", JSONArray().apply { highlights.forEach { put(it.toJson()) } })
         .put("collections", JSONArray(collections))
+        .put("scrollMode", scrollMode ?: JSONObject.NULL)
 
     companion object {
         fun fromJson(o: JSONObject) = Book(
@@ -164,6 +167,7 @@ data class Book(
                 List(a.length()) { Highlight.fromJson(a.getJSONObject(it)) }
             }.orEmpty(),
             collections = o.optJSONArray("collections")?.let { a -> List(a.length()) { a.getString(it) } }.orEmpty(),
+            scrollMode = if (o.has("scrollMode") && !o.isNull("scrollMode")) o.optBoolean("scrollMode") else null,
         )
     }
 }
@@ -254,6 +258,8 @@ class LibraryRepository(private val context: Context) {
 
     suspend fun setCollections(id: String, names: List<String>) =
         update(id) { it.copy(collections = names.map { n -> n.trim() }.filter { n -> n.isNotEmpty() }.distinct()) }
+
+    suspend fun setScrollMode(id: String, scroll: Boolean) = update(id) { it.copy(scrollMode = scroll) }
 
     suspend fun resetProgress(id: String) =
         update(id) { it.copy(chapterIndex = 0, chapterOffset = 0f, progress = 0f, lastOpenedAt = 0L) }
