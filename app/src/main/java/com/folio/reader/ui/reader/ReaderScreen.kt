@@ -588,7 +588,7 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
                     scrollMode = scrollMode,
                     timeLeft = timeLeftLabel(state, settings.charsPerMinute),
                     minutesLeft = timeLeftLabel(state, settings.charsPerMinute).removeSuffix(" left in chapter").lowercase().let {
-                        if (it.isEmpty() || it.startsWith("end")) "" else "about $it"
+                        if (it.isEmpty() || it.startsWith("end")) "" else if (it.startsWith("under")) it else "about $it"
                     },
                     onLayout = { vm.setScrollMode(!scrollMode) },
                     autoScrolling = autoScrolling,
