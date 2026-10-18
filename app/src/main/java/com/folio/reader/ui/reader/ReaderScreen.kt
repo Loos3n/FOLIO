@@ -49,6 +49,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.systemBarsIgnoringVisibility
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.Canvas
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -1104,15 +1105,22 @@ private fun ReaderBottomPanel(
             }
             Spacer(Modifier.height(4.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                FilledTonalButton(onClick = onContents, modifier = Modifier.weight(1f)) {
-                    Icon(Icons.AutoMirrored.Filled.List, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("Contents")
+                // With the auto-scroll button there too, the labels drop their glyphs to fit.
+                val roomy = !scrollMode
+                val padding = PaddingValues(horizontal = if (roomy) 24.dp else 12.dp)
+                FilledTonalButton(onClick = onContents, contentPadding = padding, modifier = Modifier.weight(1f)) {
+                    if (roomy) {
+                        Icon(Icons.AutoMirrored.Filled.List, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text("Contents", maxLines = 1)
                 }
-                FilledTonalButton(onClick = onDisplay, modifier = Modifier.weight(1f)) {
-                    Text("Aa", fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Display")
+                FilledTonalButton(onClick = onDisplay, contentPadding = padding, modifier = Modifier.weight(1f)) {
+                    if (roomy) {
+                        Text("Aa", fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text("Display", maxLines = 1)
                 }
                 // One tap between turning pages and scrolling; remembered for this book.
                 FilledTonalIconButton(onClick = onLayout) {

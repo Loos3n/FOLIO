@@ -191,6 +191,7 @@ controls_for "Switch to scrolling"
 tap_label "Switch to scrolling"
 sleep 3
 adb exec-out screencap -p > "$OUT/20-scroll.png"
+adb shell input tap $((W / 2)) $((H / 2)); sleep 2   # hide the controls
 adb shell input swipe $((W / 2)) $((H * 3 / 4)) $((W / 2)) $((H / 4)) 400; sleep 2
 adb exec-out screencap -p > "$OUT/21-scrolled.png"
 controls_for "Display"
