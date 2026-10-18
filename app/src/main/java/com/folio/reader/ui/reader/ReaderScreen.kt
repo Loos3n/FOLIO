@@ -587,6 +587,9 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
                     state = state,
                     scrollMode = scrollMode,
                     timeLeft = timeLeftLabel(state, settings.charsPerMinute),
+                    minutesLeft = timeLeftLabel(state, settings.charsPerMinute).removeSuffix(" left in chapter").lowercase().let {
+                        if (it.isEmpty() || it.startsWith("end")) "" else "about $it"
+                    },
                     onLayout = { vm.setScrollMode(!scrollMode) },
                     autoScrolling = autoScrolling,
                     onAutoScroll = {
@@ -1029,6 +1032,7 @@ private fun ReaderBottomPanel(
     state: ReaderUiState,
     scrollMode: Boolean,
     timeLeft: String,
+    minutesLeft: String,
     onLayout: () -> Unit,
     autoScrolling: Boolean,
     onAutoScroll: () -> Unit,
@@ -1063,7 +1067,7 @@ private fun ReaderBottomPanel(
                     )
                     if (state.pageCount > 0) {
                         Text(
-                            if (scrollMode) timeLeft else listOf(pagesLeftLabel(state), timeLeft).filter { it.isNotEmpty() }.joinToString(" \u00B7 "),
+                            if (scrollMode) timeLeft else pagesLeftLabel(state) + minutesLeft.let { if (it.isEmpty()) "" else " \u00B7 $it" },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
