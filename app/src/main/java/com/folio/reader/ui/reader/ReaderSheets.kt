@@ -484,9 +484,9 @@ internal fun ReadAloudSheet(
 
             Text("Voice", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Column {
-                VoiceRow("Phone's default voice", null, voice == null) { onVoice(null) }
+                VoiceRow("Automatic", "The most natural voice on your phone", voice == null) { onVoice(null) }
                 voices.forEach { v ->
-                    VoiceRow(v.label, if (v.network) "Needs internet" else null, voice == v.name) { onVoice(v.name) }
+                    VoiceRow(v.label, v.detail, voice == v.name) { onVoice(v.name) }
                 }
                 if (voices.isEmpty()) {
                     Text(
