@@ -147,6 +147,13 @@ data class Book(
     val scrollMode: Boolean? = null,
     /** Set for audiobooks: their tracks, chapters and listening position. */
     val audio: AudioInfo? = null,
+    /** For a PDF: its text turned into an EPUB (in the books folder), read like any other book. */
+    val textFileName: String? = null,
+    /** For a PDF: show its original pages rather than the text (chosen, or it has no text). */
+    val pdfPages: Boolean = false,
+    /** For a PDF's page view: the page the reader was on, and pages they bookmarked. */
+    val pdfPage: Int = 0,
+    val pdfMarks: List<Int> = emptyList(),
 ) {
     val isAudio: Boolean get() = audio != null
 
@@ -168,6 +175,10 @@ data class Book(
         .put("collections", JSONArray(collections))
         .put("scrollMode", scrollMode ?: JSONObject.NULL)
         .put("audio", audio?.toJson() ?: JSONObject.NULL)
+        .put("textFileName", textFileName ?: JSONObject.NULL)
+        .put("pdfPages", pdfPages)
+        .put("pdfPage", pdfPage)
+        .put("pdfMarks", JSONArray(pdfMarks))
 
     companion object {
         fun fromJson(o: JSONObject) = Book(
@@ -190,6 +201,10 @@ data class Book(
             collections = o.optJSONArray("collections")?.let { a -> List(a.length()) { a.getString(it) } }.orEmpty(),
             scrollMode = if (o.has("scrollMode") && !o.isNull("scrollMode")) o.optBoolean("scrollMode") else null,
             audio = o.optJSONObject("audio")?.let { AudioInfo.fromJson(it) },
+            textFileName = o.optString("textFileName").takeIf { !o.isNull("textFileName") && it.isNotEmpty() },
+            pdfPages = o.optBoolean("pdfPages"),
+            pdfPage = o.optInt("pdfPage"),
+            pdfMarks = o.optJSONArray("pdfMarks")?.let { a -> List(a.length()) { a.getInt(it) } }.orEmpty(),
         )
     }
 }
@@ -212,6 +227,43 @@ class LibraryRepository(private val context: Context) {
     val books: StateFlow<List<Book>> = _books.asStateFlow()
 
     fun bookFile(book: Book) = File(booksDir, book.fileName)
+
+    /** The EPUB to read: the book itself, or for a PDF the text version made from it. */
+    fun readableFile(book: Book): File = textFile(book)?.takeIf { it.exists() } ?: bookFile(book)
+
+    fun textFile(book: Book): File? = book.textFileName?.let { File(booksDir, it) }
+
+    /** Whether a PDF's text version is ready to read. */
+    fun textReady(book: Book): Boolean = textFile(book)?.exists() == true
+
+    /** Where a PDF's text version is written. */
+    fun newTextFile(book: Book): File = File(booksDir, "${book.id}-text.epub")
+
+    /** Records [file] (or the lack of usable text, when null) for the PDF [id]. */
+    suspend fun setPdfText(id: String, file: File?, author: String?) = update(id) { book ->
+        if (file == null) book.copy(textFileName = null, pdfPages = true)
+        else {
+            // Bookmarks made on pages by an earlier version mark pages, not places in the text.
+            val (pageMarks, kept) = book.bookmarks.partition { it.snippet.isEmpty() && it.chapterTitle.startsWith("Page ") }
+            book.copy(
+                textFileName = file.name,
+                author = book.author ?: author,
+                chapterIndex = 0,
+                chapterOffset = 0f,
+                bookmarks = kept,
+                pdfMarks = (book.pdfMarks + pageMarks.map { it.chapterIndex }).distinct().sorted(),
+            )
+        }
+    }
+
+    suspend fun setPdfPages(id: String, pages: Boolean) = update(id) { it.copy(pdfPages = pages) }
+
+    suspend fun savePdfPage(id: String, page: Int, progress: Float) =
+        update(id) { it.copy(pdfPage = page, progress = progress) }
+
+    suspend fun togglePdfMark(id: String, page: Int) = update(id) { book ->
+        book.copy(pdfMarks = if (page in book.pdfMarks) book.pdfMarks - page else (book.pdfMarks + page).sorted())
+    }
 
     fun coverFile(book: Book): File? = book.coverFileName?.let { File(coversDir, it) }?.takeIf { it.exists() }
 
@@ -420,7 +472,7 @@ class LibraryRepository(private val context: Context) {
                 val cover = theirs.coverFileName?.let { File(dir, "covers/$it") }?.takeIf { it.isFile }
                 val coverTarget = theirs.coverFileName?.let { File(coversDir, it) }
                 if (cover != null && coverTarget != null && !coverTarget.exists()) cover.copyTo(coverTarget)
-                list += theirs.copy(coverFileName = theirs.coverFileName?.takeIf { coverTarget?.exists() == true })
+                list += theirs.copy(coverFileName = theirs.coverFileName?.takeIf { coverTarget?.exists() == true }, textFileName = null)
                 ids[theirs.id] = theirs.id
                 added++
             }
@@ -443,6 +495,8 @@ class LibraryRepository(private val context: Context) {
             highlights = (mine.highlights + theirs.highlights.filter { h -> mine.highlights.none { it.id == h.id } })
                 .sortedWith(compareBy<Highlight>({ it.chapterIndex }, { it.start })),
             collections = (mine.collections + theirs.collections).distinct(),
+            pdfPage = place.pdfPage,
+            pdfMarks = (mine.pdfMarks + theirs.pdfMarks).distinct().sorted(),
             scrollMode = mine.scrollMode ?: theirs.scrollMode,
             audio = mine.audio?.let { a ->
                 val t = theirs.audio
@@ -461,6 +515,7 @@ class LibraryRepository(private val context: Context) {
             }
         } else {
             bookFile(book).delete()
+            textFile(book)?.delete()
         }
         coverFile(book)?.delete()
     }

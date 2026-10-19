@@ -151,7 +151,7 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 @Composable
-fun ReaderScreen(bookId: String, onBack: () -> Unit) {
+fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Unit)? = null) {
     val vm: ReaderViewModel = viewModel(
         factory = viewModelFactory {
             initializer {
@@ -647,6 +647,7 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
                         controlsVisible = false
                     },
                     canListen = readAloud.available,
+                    onOriginalPages = onOriginalPages,
                 )
             }
 
@@ -989,6 +990,7 @@ private fun ReaderTopBar(
     listening: Boolean,
     onListen: () -> Unit,
     canListen: Boolean,
+    onOriginalPages: (() -> Unit)? = null,
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainer,
@@ -1014,6 +1016,11 @@ private fun ReaderTopBar(
                     .weight(1f)
                     .padding(end = 4.dp),
             )
+            if (onOriginalPages != null) {
+                IconButton(onClick = onOriginalPages) {
+                    Icon(ReaderIcons.Pages, contentDescription = "Show the PDF's original pages")
+                }
+            }
             IconButton(onClick = onSearch) {
                 Icon(Icons.Filled.Search, contentDescription = "Search in book")
             }

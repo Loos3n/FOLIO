@@ -43,7 +43,8 @@ fun FolioNavHost(incoming: MutableStateFlow<Uri?>, openBook: MutableStateFlow<St
         val book = libraryVm.allBooks.value.firstOrNull { it.id == id }
         val route = when {
             book?.isAudio == true -> "listen/$id"
-            book?.isPdf == true -> "pdf/$id"
+            // A PDF reads like any other book once its text is ready, unless its pages were chosen.
+            book?.isPdf == true && (book.pdfPages || !libraryVm.textReady(book)) -> "pdf/$id"
             else -> "reader/$id"
         }
         nav.navigate(route) { launchSingleTop = true }
@@ -92,14 +93,28 @@ fun FolioNavHost(incoming: MutableStateFlow<Uri?>, openBook: MutableStateFlow<St
             arguments = listOf(navArgument("bookId") { type = NavType.StringType }),
         ) { entry ->
             val bookId = entry.arguments?.getString("bookId") ?: return@composable
-            ReaderScreen(bookId = bookId, onBack = { nav.popBackStack() })
+            val isPdf = libraryVm.allBooks.value.firstOrNull { it.id == bookId }?.isPdf == true
+            ReaderScreen(
+                bookId = bookId,
+                onBack = { nav.popBackStack() },
+                onOriginalPages = if (!isPdf) null else {
+                    {
+                        libraryVm.showPdfPages(bookId)
+                        nav.navigate("pdf/$bookId") { popUpTo("reader/{bookId}") { inclusive = true } }
+                    }
+                },
+            )
         }
         composable(
             "pdf/{bookId}",
             arguments = listOf(navArgument("bookId") { type = NavType.StringType }),
         ) { entry ->
             val bookId = entry.arguments?.getString("bookId") ?: return@composable
-            PdfReaderScreen(bookId = bookId, onBack = { nav.popBackStack() })
+            PdfReaderScreen(
+                bookId = bookId,
+                onBack = { nav.popBackStack() },
+                onOpenText = { nav.navigate("reader/$bookId") { popUpTo("pdf/{bookId}") { inclusive = true } } },
+            )
         }
         composable(
             "listen/{bookId}",

@@ -121,7 +121,7 @@ class ReaderViewModel(private val app: FolioApp, private val bookId: String) : V
                 _state.update { it.copy(loading = false, error = "This book is no longer in your library.") }
                 return@launch
             }
-            val opened = withContext(Dispatchers.IO) { runCatching { EpubBook(library.bookFile(entry)) } }
+            val opened = withContext(Dispatchers.IO) { runCatching { EpubBook(library.readableFile(entry)) } }
             opened.onSuccess { epub ->
                 book = epub
                 weights = epub.spineWeights

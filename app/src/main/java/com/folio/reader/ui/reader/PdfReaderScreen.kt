@@ -34,6 +34,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.text.style.TextAlign
+import com.folio.reader.pdf.PdfEpubWriter
+import com.folio.reader.pdf.PdfTextConverter
+import kotlinx.coroutines.CancellationException
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -90,7 +101,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.folio.reader.FolioApp
-import com.folio.reader.data.Bookmark
 import com.folio.reader.data.ReaderSettings
 import com.folio.reader.data.ReaderTheme
 import com.folio.reader.pdf.PdfBook
@@ -108,7 +118,6 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.util.UUID
 import kotlin.math.roundToInt
 
 data class PdfUiState(
@@ -118,8 +127,12 @@ data class PdfUiState(
     /** Each page's width / height. */
     val ratios: List<Float> = emptyList(),
     val startPage: Int = 0,
-    /** How far down [startPage] the screen started, 0..1. */
-    val startOffset: Float = 0f,
+    /** Pages read so far and in all while the PDF's text is being picked out. */
+    val converting: Pair<Int, Int>? = null,
+    /** The text version is ready: show it in the reader. */
+    val openText: Boolean = false,
+    /** Why the pages are shown instead of the text, once. */
+    val notice: String? = null,
 )
 
 class PdfReaderViewModel(private val app: FolioApp, private val bookId: String) : ViewModel() {
@@ -129,8 +142,8 @@ class PdfReaderViewModel(private val app: FolioApp, private val bookId: String) 
     private val _state = MutableStateFlow(PdfUiState())
     val state: StateFlow<PdfUiState> = _state.asStateFlow()
 
-    val bookmarks: StateFlow<List<Bookmark>> = library.books
-        .map { books -> books.firstOrNull { it.id == bookId }?.bookmarks.orEmpty() }
+    val marks: StateFlow<List<Int>> = library.books
+        .map { books -> books.firstOrNull { it.id == bookId }?.pdfMarks.orEmpty() }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     @Volatile private var pdf: PdfBook? = null
@@ -141,34 +154,97 @@ class PdfReaderViewModel(private val app: FolioApp, private val bookId: String) 
     private var saveJob: Job? = null
     private var lastActivity = 0L
     private var lastPage = -1
+    private var convertJob: Job? = null
 
     init {
-        viewModelScope.launch {
-            val entry = library.get(bookId)
-            if (entry == null) {
-                _state.update { it.copy(loading = false, error = "This book is no longer in your library.") }
+        val entry = library.get(bookId)
+        when {
+            entry == null -> _state.update { it.copy(loading = false, error = "This book is no longer in your library.") }
+            entry.pdfPages -> viewModelScope.launch { openPages() }
+            library.textReady(entry) -> _state.update { it.copy(openText = true) }
+            else -> readAsText()
+        }
+    }
+
+    /** Shows the text version, picking the text out of the PDF first if that hasn't been done. */
+    fun readAsText() {
+        val entry = library.get(bookId) ?: return
+        if (convertJob?.isActive == true) return
+        convertJob = viewModelScope.launch {
+            library.setPdfPages(bookId, false)
+            if (library.textReady(entry)) {
+                _state.update { it.copy(openText = true) }
                 return@launch
             }
-            runCatching {
-                withContext(Dispatchers.IO) {
-                    val book = PdfBook.open(library.bookFile(entry))
-                    pdf = book
-                    book.aspectRatios()
+            _state.update { it.copy(loading = false, title = entry.title, converting = 0 to 0) }
+            val file = library.bookFile(entry)
+            val made = try {
+                val text = PdfTextConverter.extract(app, file) { done, total ->
+                    _state.update { it.copy(converting = done to total) }
                 }
-            }.onSuccess { ratios ->
-                _state.update {
-                    it.copy(
-                        loading = false,
-                        title = entry.title,
-                        ratios = ratios,
-                        startPage = entry.chapterIndex.coerceIn(0, (ratios.size - 1).coerceAtLeast(0)),
-                        startOffset = entry.chapterOffset,
-                    )
+                if (text.scanned || text.chapters.isEmpty()) null
+                else withContext(Dispatchers.IO) {
+                    val cover = runCatching { PdfBook.open(file).use { it.render(0, 900) } }.getOrNull()
+                    val target = library.newTextFile(entry)
+                    val author = entry.author ?: text.author.takeIf(::meaningful)
+                    PdfEpubWriter.write(text, entry.title, author, cover, target)
+                    cover?.recycle()
+                    target to author
                 }
-                library.markOpened(bookId)
-            }.onFailure { e ->
-                _state.update { it.copy(loading = false, error = e.message ?: "Couldn't open this PDF.") }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                android.util.Log.w("FolioPdf", "Couldn't get the text of $bookId", e)
+                library.setPdfPages(bookId, true)
+                _state.update { it.copy(converting = null, notice = "Couldn't pick out the text in this PDF, so it's shown as pages.") }
+                openPages()
+                return@launch
             }
+            if (made != null) {
+                library.setPdfText(bookId, made.first, made.second)
+                _state.update { it.copy(converting = null, openText = true) }
+            } else {
+                library.setPdfText(bookId, null, null)
+                _state.update {
+                    it.copy(converting = null, notice = "This PDF is pictures of pages (a scan), so there's no text to show. Here are the pages instead.")
+                }
+                openPages()
+            }
+        }
+    }
+
+    fun showPages() {
+        viewModelScope.launch {
+            library.setPdfPages(bookId, true)
+            openPages()
+        }
+    }
+
+    fun noticeShown() = _state.update { it.copy(notice = null) }
+
+    fun textOpened() = _state.update { it.copy(openText = false) }
+
+    private suspend fun openPages() {
+        if (pdf != null) return
+        val entry = library.get(bookId) ?: return
+        runCatching {
+            withContext(Dispatchers.IO) {
+                val book = PdfBook.open(library.bookFile(entry))
+                pdf = book
+                book.aspectRatios()
+            }
+        }.onSuccess { ratios ->
+            _state.update {
+                it.copy(
+                    loading = false,
+                    title = entry.title,
+                    ratios = ratios,
+                    startPage = entry.pdfPage.coerceIn(0, (ratios.size - 1).coerceAtLeast(0)),
+                )
+            }
+            library.markOpened(bookId)
+        }.onFailure { e ->
+            _state.update { it.copy(loading = false, error = e.message ?: "Couldn't open this PDF.") }
         }
     }
 
@@ -178,13 +254,13 @@ class PdfReaderViewModel(private val app: FolioApp, private val bookId: String) 
         runCatching { pdf?.render(page, widthPx) }.getOrNull()?.also { pages.put(page, it) }
     }
 
-    /** Remembers the place a moment after the reader stops on it, and counts reading time. */
-    fun onPlace(page: Int, offset: Float) {
+    /** Remembers the page a moment after the reader stops on it, and counts reading time. */
+    fun onPlace(page: Int) {
         val count = _state.value.ratios.size.coerceAtLeast(1)
         saveJob?.cancel()
         saveJob = app.appScope.launch {
             delay(400)
-            library.saveProgress(bookId, page, offset, ((page + 1f) / count).coerceIn(0f, 1f))
+            library.savePdfPage(bookId, page, ((page + 1f) / count).coerceIn(0f, 1f))
         }
         // Reading time is the gaps between reaching new pages, each capped (see ReaderViewModel).
         if (page == lastPage) return
@@ -195,28 +271,8 @@ class PdfReaderViewModel(private val app: FolioApp, private val bookId: String) 
         lastPage = page
     }
 
-    fun toggleBookmark(page: Int) {
-        val existing = bookmarks.value.firstOrNull { it.chapterIndex == page }
-        val count = _state.value.ratios.size.coerceAtLeast(1)
-        viewModelScope.launch {
-            if (existing != null) library.removeBookmark(bookId, existing.id)
-            else library.addBookmark(
-                bookId,
-                Bookmark(
-                    id = UUID.randomUUID().toString(),
-                    chapterIndex = page,
-                    chapterOffset = 0f,
-                    progress = (page + 1f) / count,
-                    chapterTitle = "Page ${page + 1}",
-                    snippet = "",
-                    createdAt = System.currentTimeMillis(),
-                ),
-            )
-        }
-    }
-
-    fun removeBookmark(id: String) {
-        viewModelScope.launch { library.removeBookmark(bookId, id) }
+    fun toggleMark(page: Int) {
+        viewModelScope.launch { library.togglePdfMark(bookId, page) }
     }
 
     override fun onCleared() {
@@ -224,11 +280,14 @@ class PdfReaderViewModel(private val app: FolioApp, private val bookId: String) 
         pdf = null
         pages.evictAll()
     }
+
+    private fun meaningful(s: String) =
+        s.isNotBlank() && s.lowercase() !in setOf("anonymous", "unknown", "author", "user", "administrator", "untitled")
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PdfReaderScreen(bookId: String, onBack: () -> Unit) {
+fun PdfReaderScreen(bookId: String, onBack: () -> Unit, onOpenText: () -> Unit) {
     val vm: PdfReaderViewModel = viewModel(
         factory = viewModelFactory {
             initializer {
@@ -238,7 +297,7 @@ fun PdfReaderScreen(bookId: String, onBack: () -> Unit) {
     )
     val state by vm.state.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle()
-    val bookmarks by vm.bookmarks.collectAsStateWithLifecycle()
+    val marks by vm.marks.collectAsStateWithLifecycle()
     val theme = settings.resolvedTheme(isSystemInDarkTheme())
     val chrome = when (theme) {
         ReaderTheme.Light -> ChromeStyle.Light
@@ -262,8 +321,21 @@ fun PdfReaderScreen(bookId: String, onBack: () -> Unit) {
         }
     }
 
-    LaunchedEffect(state.loading) {
-        if (!state.loading && state.error == null) {
+    LaunchedEffect(state.openText) {
+        if (state.openText) {
+            vm.textOpened()
+            onOpenText()
+        }
+    }
+    val snackbar = remember { SnackbarHostState() }
+    LaunchedEffect(state.notice) {
+        val notice = state.notice ?: return@LaunchedEffect
+        vm.noticeShown()
+        snackbar.showSnackbar(notice, withDismissAction = true, duration = SnackbarDuration.Long)
+    }
+
+    LaunchedEffect(state.loading, state.converting) {
+        if (!state.loading && state.converting == null && state.error == null) {
             delay(2_000)
             controlsVisible = false
         }
@@ -279,7 +351,8 @@ fun PdfReaderScreen(bookId: String, onBack: () -> Unit) {
         ) {
             when {
                 state.error != null -> ErrorView(state.error!!, onBack, Modifier.align(Alignment.Center))
-                state.loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
+                state.converting != null -> Converting(state.converting!!, Modifier.align(Alignment.Center))
+                state.loading || state.openText -> CircularProgressIndicator(Modifier.align(Alignment.Center))
                 else -> PdfPages(
                     vm = vm,
                     state = state,
@@ -290,12 +363,12 @@ fun PdfReaderScreen(bookId: String, onBack: () -> Unit) {
             }
 
             AnimatedVisibility(
-                visible = controlsVisible && state.error == null,
+                visible = (controlsVisible || state.converting != null) && state.error == null,
                 enter = fadeIn() + slideInVertically { -it },
                 exit = fadeOut() + slideOutVertically { -it },
                 modifier = Modifier.align(Alignment.TopCenter),
             ) {
-                val marked = bookmarks.any { it.chapterIndex == currentPage }
+                val marked = currentPage in marks
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceContainer,
                     shape = RoundedCornerShape(bottomStart = 28.dp, bottomEnd = 28.dp),
@@ -319,10 +392,11 @@ fun PdfReaderScreen(bookId: String, onBack: () -> Unit) {
                             modifier = Modifier.weight(1f),
                         )
                         if (pageCount > 0) {
+                            TextButton(onClick = vm::readAsText) { Text("Read as text") }
                             IconButton(onClick = { showBookmarks = true }) {
                                 Icon(Icons.AutoMirrored.Filled.List, contentDescription = "Bookmarks")
                             }
-                            IconButton(onClick = { vm.toggleBookmark(currentPage) }) {
+                            IconButton(onClick = { vm.toggleMark(currentPage) }) {
                                 Icon(
                                     if (marked) ReaderIcons.Bookmark else ReaderIcons.BookmarkBorder,
                                     contentDescription = if (marked) "Remove bookmark" else "Bookmark this page",
@@ -374,6 +448,10 @@ fun PdfReaderScreen(bookId: String, onBack: () -> Unit) {
             }
         }
 
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+            SnackbarHost(snackbar, Modifier.navigationBarsPadding().padding(bottom = 96.dp))
+        }
+
         if (showBookmarks) {
             ModalBottomSheet(
                 onDismissRequest = { showBookmarks = false },
@@ -384,7 +462,7 @@ fun PdfReaderScreen(bookId: String, onBack: () -> Unit) {
                     style = MaterialTheme.typography.titleLarge,
                     modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
                 )
-                if (bookmarks.isEmpty()) {
+                if (marks.isEmpty()) {
                     Text(
                         "Tap the bookmark at the top to save the page you're on.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -392,19 +470,19 @@ fun PdfReaderScreen(bookId: String, onBack: () -> Unit) {
                     )
                 }
                 LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
-                    items(bookmarks, key = { it.id }) { mark ->
+                    items(marks, key = { it }) { mark ->
                         Row(
                             Modifier
                                 .fillMaxWidth()
                                 .clickable {
                                     showBookmarks = false
-                                    scope.launch { listState.scrollToItem(mark.chapterIndex.coerceIn(0, (pageCount - 1).coerceAtLeast(0))) }
+                                    scope.launch { listState.scrollToItem(mark.coerceIn(0, (pageCount - 1).coerceAtLeast(0))) }
                                 }
                                 .padding(start = 24.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text(mark.chapterTitle, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-                            IconButton(onClick = { vm.removeBookmark(mark.id) }) {
+                            Text("Page ${mark + 1}", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                            IconButton(onClick = { vm.toggleMark(mark) }) {
                                 Icon(Icons.Filled.Delete, contentDescription = "Delete bookmark")
                             }
                         }
@@ -455,10 +533,8 @@ private fun PdfPages(
 
         // Put the reader back where they left off.
         LaunchedEffect(Unit) {
-            if (listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0 && state.startPage + state.startOffset > 0f) {
-                val ratio = state.ratios.getOrNull(state.startPage) ?: 0.707f
-                val pageHeight = viewWidth * zoom / ratio
-                listState.scrollToItem(state.startPage, (state.startOffset * pageHeight).roundToInt())
+            if (listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0 && state.startPage > 0) {
+                listState.scrollToItem(state.startPage)
             }
         }
 
@@ -466,7 +542,7 @@ private fun PdfPages(
             snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
                 .collect { (index, offset) ->
                     val size = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }?.size ?: return@collect
-                    vm.onPlace(index, (offset.toFloat() / size.coerceAtLeast(1)).coerceIn(0f, 1f))
+                    vm.onPlace(index)
                 }
         }
 
@@ -577,6 +653,35 @@ private fun PdfPage(
                 colorFilter = filter,
                 modifier = Modifier.fillMaxSize(),
             )
+        }
+    }
+}
+
+/** Shown while the PDF's text is picked out, page by page. */
+@Composable
+private fun Converting(progress: Pair<Int, Int>, modifier: Modifier = Modifier) {
+    val (done, total) = progress
+    Column(
+        modifier
+            .padding(32.dp)
+            .fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text("Getting this PDF ready to read", style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center)
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Folio is laying out its text like an e-book, so it fits your screen and settings. This happens once.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(Modifier.height(24.dp))
+        if (total > 0) {
+            LinearProgressIndicator(progress = { done.toFloat() / total }, modifier = Modifier.fillMaxWidth())
+            Spacer(Modifier.height(8.dp))
+            Text("Page $done of $total", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else {
+            LinearProgressIndicator(Modifier.fillMaxWidth())
         }
     }
 }

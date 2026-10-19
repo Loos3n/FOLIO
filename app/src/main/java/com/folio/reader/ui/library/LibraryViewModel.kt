@@ -157,6 +157,13 @@ class LibraryViewModel(private val app: FolioApp) : ViewModel() {
         }
     }
 
+    fun textReady(book: Book) = library.textReady(book)
+
+    fun showPdfPages(id: String) {
+        // Saved before the page view opens, so it opens on the pages rather than the text.
+        kotlinx.coroutines.runBlocking { library.setPdfPages(id, true) }
+    }
+
     fun delete(book: Book) {
         viewModelScope.launch { library.delete(book) }
     }
