@@ -12,8 +12,21 @@ android {
         applicationId = "com.folio.reader"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
+        // Each CI build counts up, so a new APK always installs as an update.
+        versionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
         versionName = "1.0"
+    }
+
+    signingConfigs {
+        // One key kept in the repo, so every build (on any machine or CI runner) is signed
+        // the same way and installs over the last one. Android refuses an update signed
+        // with a different key, which is what forced uninstalling before.
+        getByName("debug") {
+            storeFile = file("folio-debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
     }
 
     buildTypes {
