@@ -40,14 +40,16 @@ jobs:
           sudo udevadm trigger --name-match=kvm
       # Booting from a saved snapshot takes seconds instead of minutes. The snapshot is made
       # once (with the text-to-speech engine already installed) and cached.
+      # Restored and saved as separate steps, so the cache holds the emulator as set up here
+      # and never its state after a test run (actions/cache would save that at the job's end).
       - name: Restore the emulator snapshot
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         id: avd-cache
         with:
           path: |
             ~/.android/avd/*
             ~/.android/adb*
-          key: avd-31-pixel_6-espeak-v1
+          key: avd-31-pixel_6-espeak-v2
       - name: Make the emulator snapshot
         if: steps.avd-cache.outputs.cache-hit != 'true'
         uses: reactivecircus/android-emulator-runner@v2
@@ -62,6 +64,15 @@ jobs:
           force-avd-creation: false
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: bash .github/scripts/emulator-setup.sh
+      - name: Save the emulator snapshot
+        if: steps.avd-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          key: avd-31-pixel_6-espeak-v2
       - name: Run app on emulator and take screenshots
         uses: reactivecircus/android-emulator-runner@v2
         with:

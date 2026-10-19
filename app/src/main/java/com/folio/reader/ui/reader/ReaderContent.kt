@@ -100,7 +100,11 @@ object ReaderContent {
 
     private fun notFound() = WebResourceResponse("text/plain", "UTF-8", 404, "Not found", emptyMap(), ByteArrayInputStream(ByteArray(0)))
 
-    private fun inject(html: String, css: String, start: ChapterStart): String {
+    /** `<meta http-equiv="refresh">` would let a book send the reader to a website by itself. */
+    private val META_REFRESH = Regex("<meta\\b[^>]*http-equiv\\s*=\\s*[\"']?refresh[^>]*>", RegexOption.IGNORE_CASE)
+
+    private fun inject(source: String, css: String, start: ChapterStart): String {
+        val html = source.replace(META_REFRESH, "")
         val query = buildString {
             append("o=").append(String.format(Locale.US, "%.5f", start.offset))
             if (start.fragment != null) append("&amp;f=").append(Uri.encode(start.fragment))

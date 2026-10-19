@@ -8,7 +8,10 @@ mkdir -p "$OUT"
 # PART picks one part of the tour (the workflow runs the parts side by side); empty runs all.
 part() { [ -z "${PART:-}" ] || [ "$PART" = "$1" ]; }
 
-adb install -r app/build/outputs/apk/debug/app-debug.apk
+# The cached emulator may hold an older Folio signed with another runner's debug key,
+# which would make a plain reinstall fail and leave the old app in place.
+adb uninstall $PKG > /dev/null 2>&1 || true
+adb install app/build/outputs/apk/debug/app-debug.apk || { echo "Couldn't install the app"; exit 1; }
 
 # eSpeak NG normally comes from the cached snapshot (emulator-setup.sh); add it if not.
 if ! adb shell pm list packages | grep -q com.reecedunn.espeak; then
