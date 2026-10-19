@@ -376,7 +376,7 @@ adb exec-out screencap -p > "$OUT/60-free-books.png"
 tap_label "Science fiction"
 sleep 10
 adb exec-out screencap -p > "$OUT/61-free-scifi.png"
-adb shell input tap $((W / 2)) $((H * 22 / 100)); sleep 1
+tap_label "Search 70,000 free books"
 adb shell input text "pride%sand%sprejudice"; sleep 1
 adb shell input keyevent KEYCODE_BACK; sleep 10
 adb exec-out screencap -p > "$OUT/62-free-search.png"
