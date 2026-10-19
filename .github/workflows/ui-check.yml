@@ -1,12 +1,6 @@
 name: UI check
+# Run by hand only (Actions tab, "Run workflow"): new builds are tested on a phone.
 on:
-  push:
-    paths:
-      - "app/**"
-      - "gradle/**"
-      - "*.gradle.kts"
-      - ".github/scripts/**"
-      - ".github/workflows/ui-check.yml"
   workflow_dispatch:
 permissions:
   contents: write
