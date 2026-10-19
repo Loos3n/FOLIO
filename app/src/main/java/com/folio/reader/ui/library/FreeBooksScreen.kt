@@ -91,6 +91,8 @@ sealed interface Getting {
     data object Downloading : Getting
     data class Added(val bookId: String) : Getting
     data object Failed : Getting
+    /** Gutenberg has no e-book for it (e.g. it's a recording). */
+    data object Unavailable : Getting
 }
 
 data class FreeBooksState(
@@ -165,11 +167,14 @@ class FreeBooksViewModel(private val app: FolioApp) : ViewModel() {
         }
     }
 
-    /** The library book this one already is, if it's been added before. */
+    /** Which Gutenberg books have been added, and as which library book (Gutenberg has several editions of many). */
+    private val added = app.getSharedPreferences("free_books", android.content.Context.MODE_PRIVATE)
+
+    /** The library book this one already is, if it's been added before and is still there. */
     fun inLibrary(book: FreeBook): String? {
         (_getting.value[book.id] as? Getting.Added)?.let { return it.bookId }
-        val title = book.title.lowercase()
-        return app.library.books.value.firstOrNull { !it.isAudio && it.title.lowercase().startsWith(title) }?.id
+        val id = added.getString(book.id.toString(), null) ?: return null
+        return id.takeIf { app.library.get(it) != null }
     }
 
     fun get(book: FreeBook) {
@@ -186,7 +191,12 @@ class FreeBooksViewModel(private val app: FolioApp) : ViewModel() {
                 }
             }
             result.onFailure { Log.w("FolioFree", "download ${book.epubUrl}: $it") }
-            _getting.update { it + (book.id to (result.getOrNull()?.let { b -> Getting.Added(b.id) } ?: Getting.Failed)) }
+            result.getOrNull()?.let { b -> added.edit().putString(book.id.toString(), b.id).apply() }
+            val outcome = result.fold(
+                { b -> Getting.Added(b.id) },
+                { e -> if (e.message == "HTTP 404") Getting.Unavailable else Getting.Failed },
+            )
+            _getting.update { it + (book.id to outcome) }
         }
     }
 }
@@ -378,6 +388,12 @@ private fun FreeBookRow(
                     Text("Adding to your library…", style = MaterialTheme.typography.bodyMedium)
                 }
                 Getting.Failed -> FilledTonalButton(onClick = onGet) { Text("Couldn't download · Try again") }
+                Getting.Unavailable -> Text(
+                    "Not available as an e-book",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 10.dp),
+                )
                 null -> FilledTonalButton(onClick = onGet) { Text("Add to library") }
             }
         }
