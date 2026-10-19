@@ -5,6 +5,8 @@ set -x
 PKG=com.folio.reader
 OUT=shots
 mkdir -p "$OUT"
+# PART picks one part of the tour (the workflow runs the parts side by side); empty runs all.
+part() { [ -z "${PART:-}" ] || [ "$PART" = "$1" ]; }
 
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 
@@ -32,41 +34,6 @@ adb shell run-as $PKG cp /data/local/tmp/book.epub files/books/test.epub
 printf '%s' '[{"id":"test","title":"Crime and Punishment","author":"Fyodor Dostoyevsky","fileName":"test.epub","coverFileName":null,"addedAt":1,"lastOpenedAt":0,"progress":0,"chapterIndex":0,"chapterOffset":0}]' \
   | adb exec-in run-as $PKG sh -c 'cat > files/library.json'
 
-adb logcat -c
-adb shell am start -W -n $PKG/.MainActivity --es open_book test
-sleep 8
-adb exec-out screencap -p > "$OUT/1-reader-first-page.png"
-
-swipe_next() { adb shell input swipe $((W * 8 / 10)) $((H / 2)) $((W * 2 / 10)) $((H / 2)) 150; sleep 2; }
-swipe_next
-adb exec-out screencap -p > "$OUT/2-after-one-swipe.png"
-swipe_next; swipe_next; swipe_next
-adb exec-out screencap -p > "$OUT/3-after-four-swipes.png"
-
-# Tap the right edge to turn a page, then the middle for the controls.
-adb shell input tap $((W * 9 / 10)) $((H / 2)); sleep 2
-adb exec-out screencap -p > "$OUT/4-after-tap.png"
-adb shell input tap $((W / 2)) $((H / 2)); sleep 2
-adb exec-out screencap -p > "$OUT/5-controls.png"
-
-adb shell input keyevent KEYCODE_BACK; sleep 2
-adb shell input keyevent KEYCODE_BACK; sleep 3
-adb exec-out screencap -p > "$OUT/6-library.png"
-
-# Open a few files further in, where the story text starts.
-unzip -l book.epub > "$OUT/book-files.txt" || true
-for idx in 2 3 4; do
-  adb shell am force-stop $PKG
-  printf '[{"id":"test","title":"Crime and Punishment","author":"Fyodor Dostoyevsky","fileName":"test.epub","coverFileName":null,"addedAt":1,"lastOpenedAt":0,"progress":0,"chapterIndex":%d,"chapterOffset":0}]' "$idx" \
-    | adb exec-in run-as $PKG sh -c 'cat > files/library.json'
-  adb shell am start -W -n $PKG/.MainActivity --es open_book test
-  sleep 8
-  adb exec-out screencap -p > "$OUT/7-file-$idx.png"
-  swipe_next
-  adb exec-out screencap -p > "$OUT/7-file-$idx-next.png"
-done
-
-# Bookmarks and read-aloud, on the first chapter of the story (file 3).
 # Taps controls by their accessibility label, read from a UI dump.
 find_label() {
   local xy try
@@ -102,6 +69,53 @@ tap_label() {
   if [ -n "$xy" ]; then adb shell input tap $xy; else echo "no control labelled '$1'" | tee -a "$OUT/tts.txt"; fi
   sleep 2
 }
+# Taps item N (0 = Highlight, 1 = Note, 2 = Define, 3 = Copy) of the selection menu.
+tap_menu() {
+  adb exec-out screencap -p > menu.png; cp menu.png "$OUT/menu-$1.png"
+  local xy
+  xy=$(python3 .github/scripts/menu-item.py menu.png "$1")
+  if [ -n "$xy" ]; then adb shell input tap $xy; else echo "no selection menu item $1" | tee -a "$OUT/tts.txt"; fi
+  sleep 2
+}
+long_press() { adb shell input swipe "$1" "$2" "$1" "$2" 1200; sleep 2; }
+swipe_next() { adb shell input swipe $((W * 8 / 10)) $((H / 2)) $((W * 2 / 10)) $((H / 2)) 150; sleep 2; }
+# Shows the controls (a centre tap toggles them) until the given control is on screen.
+controls_for() { [ -n "$(find_label "$1")" ] || { adb shell input tap $((W / 2)) $((H / 2)); sleep 2; }; }
+adb logcat -c
+if part reading; then
+adb shell am start -W -n $PKG/.MainActivity --es open_book test
+sleep 8
+adb exec-out screencap -p > "$OUT/1-reader-first-page.png"
+
+swipe_next
+adb exec-out screencap -p > "$OUT/2-after-one-swipe.png"
+swipe_next; swipe_next; swipe_next
+adb exec-out screencap -p > "$OUT/3-after-four-swipes.png"
+
+# Tap the right edge to turn a page, then the middle for the controls.
+adb shell input tap $((W * 9 / 10)) $((H / 2)); sleep 2
+adb exec-out screencap -p > "$OUT/4-after-tap.png"
+adb shell input tap $((W / 2)) $((H / 2)); sleep 2
+adb exec-out screencap -p > "$OUT/5-controls.png"
+
+adb shell input keyevent KEYCODE_BACK; sleep 2
+adb shell input keyevent KEYCODE_BACK; sleep 3
+adb exec-out screencap -p > "$OUT/6-library.png"
+
+# Open a few files further in, where the story text starts.
+unzip -l book.epub > "$OUT/book-files.txt" || true
+for idx in 2 3 4; do
+  adb shell am force-stop $PKG
+  printf '[{"id":"test","title":"Crime and Punishment","author":"Fyodor Dostoyevsky","fileName":"test.epub","coverFileName":null,"addedAt":1,"lastOpenedAt":0,"progress":0,"chapterIndex":%d,"chapterOffset":0}]' "$idx" \
+    | adb exec-in run-as $PKG sh -c 'cat > files/library.json'
+  adb shell am start -W -n $PKG/.MainActivity --es open_book test
+  sleep 8
+  adb exec-out screencap -p > "$OUT/7-file-$idx.png"
+  swipe_next
+  adb exec-out screencap -p > "$OUT/7-file-$idx-next.png"
+done
+
+# Bookmarks and read-aloud, on the first chapter of the story (file 3).
 adb shell am force-stop $PKG
 printf '[{"id":"test","title":"Crime and Punishment","author":"Fyodor Dostoyevsky","fileName":"test.epub","coverFileName":null,"addedAt":1,"lastOpenedAt":0,"progress":0,"chapterIndex":3,"chapterOffset":0}]' \
   | adb exec-in run-as $PKG sh -c 'cat > files/library.json'
@@ -130,15 +144,6 @@ adb shell input keyevent KEYCODE_BACK; sleep 1
 
 # Highlights, notes and the dictionary: press and hold a word, then use the menu.
 pip install --quiet pillow || true
-# Taps item N (0 = Highlight, 1 = Note, 2 = Define, 3 = Copy) of the selection menu.
-tap_menu() {
-  adb exec-out screencap -p > menu.png; cp menu.png "$OUT/menu-$1.png"
-  local xy
-  xy=$(python3 .github/scripts/menu-item.py menu.png "$1")
-  if [ -n "$xy" ]; then adb shell input tap $xy; else echo "no selection menu item $1" | tee -a "$OUT/tts.txt"; fi
-  sleep 2
-}
-long_press() { adb shell input swipe "$1" "$2" "$1" "$2" 1200; sleep 2; }
 adb shell input tap $((W / 2)) $((H / 2)); sleep 1   # hide the controls
 long_press $((W * 35 / 100)) $((H / 2))
 adb exec-out screencap -p > "$OUT/11-selection-menu.png"
@@ -176,8 +181,6 @@ adb shell input keyevent KEYCODE_BACK; sleep 1
 adb shell run-as $PKG cat files/library.json > "$OUT/library.json" || true
 
 # Scrolling mode: switch with one tap, scroll, the reading ruler, auto-scroll, and back.
-# Shows the controls (a centre tap toggles them) until the given control is on screen.
-controls_for() { [ -n "$(find_label "$1")" ] || { adb shell input tap $((W / 2)) $((H / 2)); sleep 2; }; }
 controls_for "Switch to scrolling"
 tap_label "Switch to scrolling"
 sleep 3
@@ -224,6 +227,9 @@ tap_label "Save"
 adb exec-out screencap -p > "$OUT/19-collection.png"
 adb shell run-as $PKG cat files/stats.json > "$OUT/stats.json" || true
 
+fi
+
+if part listening; then
 # Audiobooks: an M4B with chapters and cover art, imported as if picked, then played.
 command -v ffmpeg > /dev/null || { sudo apt-get update -q && sudo apt-get install -y -q ffmpeg; }
 cat > chapters.txt <<'META'
@@ -356,6 +362,9 @@ adb shell am start -W -n $PKG/.MainActivity --es open_book test
 sleep 8
 adb exec-out screencap -p > "$OUT/55-restored-book.png"
 
+fi
+
+if part freebooks; then
 # Free books: browse Project Gutenberg, search, and add one to the library.
 adb shell am force-stop $PKG; sleep 1
 adb shell am start -W -n $PKG/.MainActivity
@@ -377,6 +386,8 @@ tap_label "In your library · Read"
 sleep 8
 adb exec-out screencap -p > "$OUT/64-free-opened.png"
 adb shell run-as $PKG cat files/library.json > "$OUT/library-free.json" || true
+
+fi
 
 adb shell dumpsys package com.svox.pico > /dev/null 2>&1 && echo "pico present" >> "$OUT/tts.txt"
 adb shell settings get secure tts_default_synth >> "$OUT/tts.txt" 2>&1 || true

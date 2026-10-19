@@ -10,12 +10,14 @@ on:
   workflow_dispatch:
 permissions:
   contents: write
-# A newer push makes an older check pointless: stop it rather than queue behind it.
-concurrency:
-  group: ui-check-${{ github.ref }}
-  cancel-in-progress: true
 jobs:
   emulator:
+    # The tour is split into parts that run side by side on separate emulators.
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [reading, listening, freebooks]
+    name: emulator (${{ matrix.part }})
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -73,16 +75,19 @@ jobs:
           force-avd-creation: false
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot-save -camera-back none
           script: bash .github/scripts/ui-check.sh
-      # Screenshots go to the "ui-check-shots" branch (Actions artifacts are over quota,
-      # and creating releases from this job has been refused with HTTP 403).
-      - name: Publish screenshots to the "ui-check-shots" branch
+        env:
+          PART: ${{ matrix.part }}
+      # Screenshots go to a "ui-check-shots-<part>" branch per part (Actions artifacts are
+      # over quota, and creating releases from this job has been refused with HTTP 403).
+      - name: Publish screenshots
         if: always()
         run: |
           ls -la shots || exit 0
+          BRANCH=ui-check-shots-${{ matrix.part }}
           cd shots
-          git init -q -b ui-check-shots
+          git init -q -b "$BRANCH"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -qm "UI check screenshots for ${GITHUB_SHA::7}"
-          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" ui-check-shots
+          git commit -qm "UI check screenshots (${{ matrix.part }}) for ${GITHUB_SHA::7}"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" "$BRANCH"
