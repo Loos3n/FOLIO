@@ -24,6 +24,15 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.util.UUID
 
+/** What a restore did: books added, books already here that were updated, and books skipped. */
+data class RestoreCounts(
+    val added: Int,
+    val merged: Int,
+    val skipped: Int,
+    /** Backup book id to the id it has in this library. */
+    val ids: Map<String, String>,
+)
+
 /** A saved page: which chapter file, where in it (0..1), and enough text to recognise it. */
 data class Bookmark(
     val id: String,
@@ -296,7 +305,20 @@ class LibraryRepository(private val context: Context) {
             val bookTitle = title ?: ordered.first().second.substringBeforeLast('.').ifBlank { "Untitled" }
             _books.value.firstOrNull { it.isAudio && it.title == bookTitle && it.author == author }?.let { existing ->
                 coverName?.let { File(coversDir, it).delete() }
-                return@runCatching existing
+                // Already in the library (perhaps restored from a backup made on another phone):
+                // play it from these files, keeping the listener's place.
+                val old = existing.audio ?: return@runCatching existing
+                val keep = old.track < tracks.size
+                val relinked = existing.copy(
+                    audio = old.copy(
+                        tracks = tracks,
+                        chapters = chapters,
+                        track = if (keep) old.track else 0,
+                        positionMs = if (keep) old.positionMs else 0,
+                    ),
+                )
+                mutate { list -> list.map { if (it.id == existing.id) relinked else it } }
+                return@runCatching relinked
             }
             val book = Book(
                 id = id,
@@ -310,6 +332,75 @@ class LibraryRepository(private val context: Context) {
             mutate { it + book }
             book
         }
+    }
+
+    /** True if any of an audiobook's files can't be opened on this phone (e.g. after a restore). */
+    fun audioMissing(book: Book): Boolean = book.audio?.tracks?.any { t ->
+        runCatching { context.contentResolver.openFileDescriptor(Uri.parse(t.uri), "r")!!.close() }.isFailure
+    } ?: false
+
+    /**
+     * Adds the books from a backup, taking their files from [dir] (`books/` and `covers/`).
+     * A book already here keeps its file and gains the backup's bookmarks, highlights and
+     * collections, and its reading place if the backup's is more recent.
+     */
+    suspend fun restore(backup: List<Book>, dir: File): RestoreCounts = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            val list = _books.value.toMutableList()
+            val ids = HashMap<String, String>()
+            var added = 0
+            var merged = 0
+            var skipped = 0
+            for (theirs in backup) {
+                val i = list.indexOfFirst { it.id == theirs.id }.takeIf { it >= 0 }
+                    ?: list.indexOfFirst { it.isAudio == theirs.isAudio && it.title == theirs.title && it.author == theirs.author }
+                if (i >= 0) {
+                    list[i] = mergeBook(list[i], theirs)
+                    ids[theirs.id] = list[i].id
+                    merged++
+                    continue
+                }
+                if (!theirs.isAudio) {
+                    val file = File(dir, "books/${theirs.fileName}")
+                    val target = File(booksDir, theirs.fileName)
+                    if (!file.isFile || target.exists()) {
+                        skipped++
+                        continue
+                    }
+                    file.copyTo(target)
+                }
+                val cover = theirs.coverFileName?.let { File(dir, "covers/$it") }?.takeIf { it.isFile }
+                val coverTarget = theirs.coverFileName?.let { File(coversDir, it) }
+                if (cover != null && coverTarget != null && !coverTarget.exists()) cover.copyTo(coverTarget)
+                list += theirs.copy(coverFileName = theirs.coverFileName?.takeIf { coverTarget?.exists() == true })
+                ids[theirs.id] = theirs.id
+                added++
+            }
+            _books.value = list
+            persist(list)
+            RestoreCounts(added, merged, skipped, ids)
+        }
+    }
+
+    private fun mergeBook(mine: Book, theirs: Book): Book {
+        val newer = theirs.lastOpenedAt > mine.lastOpenedAt
+        val place = if (newer) theirs else mine
+        return mine.copy(
+            lastOpenedAt = place.lastOpenedAt,
+            progress = place.progress,
+            chapterIndex = place.chapterIndex,
+            chapterOffset = place.chapterOffset,
+            bookmarks = (mine.bookmarks + theirs.bookmarks.filter { b -> mine.bookmarks.none { it.id == b.id } })
+                .sortedWith(compareBy<Bookmark>({ it.chapterIndex }, { it.chapterOffset })),
+            highlights = (mine.highlights + theirs.highlights.filter { h -> mine.highlights.none { it.id == h.id } })
+                .sortedWith(compareBy<Highlight>({ it.chapterIndex }, { it.start })),
+            collections = (mine.collections + theirs.collections).distinct(),
+            scrollMode = mine.scrollMode ?: theirs.scrollMode,
+            audio = mine.audio?.let { a ->
+                val t = theirs.audio
+                if (newer && t != null && t.track < a.tracks.size) a.copy(track = t.track, positionMs = t.positionMs, speed = t.speed) else a
+            },
+        )
     }
 
     suspend fun delete(book: Book) = withContext(Dispatchers.IO) {

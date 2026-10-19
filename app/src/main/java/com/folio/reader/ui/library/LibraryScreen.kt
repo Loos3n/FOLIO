@@ -45,6 +45,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
@@ -93,6 +94,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.folio.reader.data.Backup
 import com.folio.reader.data.Book
 import java.util.Calendar
 import kotlin.math.roundToInt
@@ -124,6 +126,16 @@ fun LibraryScreen(
         vm.import(uris)
     }
     val pickBooks = { picker.launch(BOOK_TYPES) }
+    val backupTarget = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(Backup.MIME)) { uri: Uri? ->
+        uri?.let(vm::backUp)
+    }
+    val backupSource = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+        uri?.let(vm::restore)
+    }
+    val backUp = { backupTarget.launch(vm.backupName()) }
+    // Some file pickers label .zip as octet-stream, so allow both.
+    val restore = { backupSource.launch(arrayOf(Backup.MIME, "application/x-zip-compressed", "application/octet-stream")) }
+    var notice by remember { mutableStateOf<LibraryEvent.Notice?>(null) }
     val app = LocalContext.current.applicationContext as FolioApp
     val listening by app.audio.state.collectAsStateWithLifecycle()
     val playingBook = allBooks.firstOrNull { it.id == listening.bookId }
@@ -133,6 +145,7 @@ fun LibraryScreen(
             when (event) {
                 is LibraryEvent.Message -> snackbar.showSnackbar(event.text)
                 is LibraryEvent.Open -> onOpen(event.bookId)
+                is LibraryEvent.Notice -> notice = event
             }
         }
     }
@@ -170,7 +183,7 @@ fun LibraryScreen(
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
         if (allBooks.isEmpty()) {
-            EmptyLibrary(importing = importing, onAdd = pickBooks, modifier = Modifier.padding(padding))
+            EmptyLibrary(importing = importing, onAdd = pickBooks, onRestore = restore, modifier = Modifier.padding(padding))
             return@Scaffold
         }
         Box(Modifier.fillMaxSize().padding(padding)) {
@@ -194,6 +207,8 @@ fun LibraryScreen(
                         sort = sort,
                         onSort = vm::setSort,
                         onStats = { showStats = true },
+                        onBackUp = backUp,
+                        onRestore = restore,
                     )
                 }
                 item(span = { GridItemSpan(maxLineSpan) }, key = "search") {
@@ -247,6 +262,14 @@ fun LibraryScreen(
         }
     }
 
+    notice?.let { n ->
+        AlertDialog(
+            onDismissRequest = { notice = null },
+            title = { Text(n.title) },
+            text = { Text(n.text) },
+            confirmButton = { TextButton(onClick = { notice = null }) { Text("OK") } },
+        )
+    }
     if (showStats) {
         val stats by vm.stats.collectAsStateWithLifecycle()
         StatsSheet(stats = stats, books = allBooks, onDismiss = { showStats = false })
@@ -288,8 +311,17 @@ private fun greeting(): String = when (Calendar.getInstance().get(Calendar.HOUR_
 }
 
 @Composable
-private fun Header(count: Int, importing: Boolean, sort: SortOrder, onSort: (SortOrder) -> Unit, onStats: () -> Unit) {
+private fun Header(
+    count: Int,
+    importing: Boolean,
+    sort: SortOrder,
+    onSort: (SortOrder) -> Unit,
+    onStats: () -> Unit,
+    onBackUp: () -> Unit,
+    onRestore: () -> Unit,
+) {
     var menuOpen by remember { mutableStateOf(false) }
+    var moreOpen by remember { mutableStateOf(false) }
     Column {
         Row(verticalAlignment = Alignment.Bottom) {
             Column(Modifier.weight(1f)) {
@@ -324,6 +356,29 @@ private fun Header(count: Int, importing: Boolean, sort: SortOrder, onSort: (Sor
                             },
                         )
                     }
+                }
+            }
+            Box {
+                IconButton(onClick = { moreOpen = true }) {
+                    Icon(Icons.Filled.MoreVert, contentDescription = "More options", tint = MaterialTheme.colorScheme.primary)
+                }
+                DropdownMenu(expanded = moreOpen, onDismissRequest = { moreOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Back up library") },
+                        enabled = !importing,
+                        onClick = {
+                            moreOpen = false
+                            onBackUp()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Restore from backup") },
+                        enabled = !importing,
+                        onClick = {
+                            moreOpen = false
+                            onRestore()
+                        },
+                    )
                 }
             }
         }
@@ -700,7 +755,7 @@ private fun Badge(text: String, modifier: Modifier = Modifier, icon: Boolean = f
 }
 
 @Composable
-private fun EmptyLibrary(importing: Boolean, onAdd: () -> Unit, modifier: Modifier = Modifier) {
+private fun EmptyLibrary(importing: Boolean, onAdd: () -> Unit, onRestore: () -> Unit, modifier: Modifier = Modifier) {
     Column(
         modifier
             .fillMaxSize()
@@ -752,5 +807,7 @@ private fun EmptyLibrary(importing: Boolean, onAdd: () -> Unit, modifier: Modifi
             Spacer(Modifier.width(8.dp))
             Text(if (importing) "Adding…" else "Add books")
         }
+        Spacer(Modifier.height(8.dp))
+        TextButton(onClick = onRestore, enabled = !importing) { Text("Restore from a backup") }
     }
 }

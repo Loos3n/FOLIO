@@ -4,6 +4,7 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.folio.reader.FolioApp
+import com.folio.reader.data.Backup
 import com.folio.reader.data.Book
 import com.folio.reader.data.StatsSnapshot
 import kotlinx.coroutines.channels.Channel
@@ -29,6 +30,8 @@ fun Book.isReading() = lastOpenedAt > 0 && !isFinished()
 sealed interface LibraryEvent {
     data class Message(val text: String) : LibraryEvent
     data class Open(val bookId: String) : LibraryEvent
+    /** Worth more than a passing message: shown until dismissed. */
+    data class Notice(val title: String, val text: String) : LibraryEvent
 }
 
 class LibraryViewModel(private val app: FolioApp) : ViewModel() {
@@ -150,6 +153,48 @@ class LibraryViewModel(private val app: FolioApp) : ViewModel() {
 
     fun delete(book: Book) {
         viewModelScope.launch { library.delete(book) }
+    }
+
+    private val backup = Backup(app, library, app.settings, app.stats)
+
+    fun backupName() = Backup.suggestedName()
+
+    fun backUp(uri: Uri) {
+        viewModelScope.launch {
+            _importing.value = true
+            val result = runCatching { backup.write(uri) }
+            _importing.value = false
+            result
+                .onSuccess { n -> _events.send(LibraryEvent.Message(if (n == 1) "Backed up 1 book" else "Backed up $n books")) }
+                .onFailure { _events.send(LibraryEvent.Message("Couldn't back up. ${it.message ?: ""}".trim())) }
+        }
+    }
+
+    fun restore(uri: Uri) {
+        viewModelScope.launch {
+            _importing.value = true
+            val result = runCatching { backup.restore(uri) }
+            _importing.value = false
+            result.onFailure {
+                _events.send(LibraryEvent.Notice("Couldn't restore", it.message ?: "Something went wrong reading that file."))
+            }
+            val summary = result.getOrNull() ?: return@launch
+            val c = summary.counts
+            val parts = ArrayList<String>()
+            parts += when {
+                c.added == 0 && c.merged == 0 -> "There were no books in that backup."
+                c.merged == 0 -> if (c.added == 1) "Added 1 book with its place, highlights and notes." else "Added ${c.added} books with their places, highlights and notes."
+                c.added == 0 -> "All ${c.merged} books were already here; their places, highlights and notes are up to date."
+                else -> "Added ${c.added} and updated ${c.merged} already here, with places, highlights and notes."
+            }
+            if (c.skipped > 0) parts += "${c.skipped} couldn't be restored because the backup was missing their files."
+            if (summary.audioToReAdd.isNotEmpty()) {
+                val names = summary.audioToReAdd.joinToString { "“$it”" }
+                parts += "To keep listening to $names, add the audio files again with Add books. Your place is kept."
+            }
+            parts += "Your settings and reading stats were restored too."
+            _events.send(LibraryEvent.Notice("Backup restored", parts.joinToString("\n\n")))
+        }
     }
 
     fun markUnread(book: Book) {

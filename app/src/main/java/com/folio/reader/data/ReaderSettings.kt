@@ -1,6 +1,7 @@
 package com.folio.reader.data
 
 import android.content.Context
+import org.json.JSONObject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -74,6 +75,35 @@ class SettingsRepository(context: Context) {
             .putFloat("autoScrollSpeed", next.autoScrollSpeed)
             .putFloat("charsPerMinute", next.charsPerMinute)
             .apply()
+    }
+
+    /** Every setting, for a backup. */
+    fun toJson(): JSONObject {
+        val o = JSONObject()
+        for ((key, value) in prefs.all) {
+            when (value) {
+                is Boolean, is Int, is Long, is String -> o.put(key, JSONObject().put("t", value.javaClass.simpleName).put("v", value))
+                is Float -> o.put(key, JSONObject().put("t", "Float").put("v", value.toDouble()))
+            }
+        }
+        return o
+    }
+
+    /** Puts back the settings from a backup. */
+    fun restore(o: JSONObject) {
+        val edit = prefs.edit()
+        for (key in o.keys()) {
+            val e = o.optJSONObject(key) ?: continue
+            when (e.optString("t")) {
+                "Boolean" -> edit.putBoolean(key, e.optBoolean("v"))
+                "Integer" -> edit.putInt(key, e.optInt("v"))
+                "Long" -> edit.putLong(key, e.optLong("v"))
+                "Float" -> edit.putFloat(key, e.optDouble("v").toFloat())
+                "String" -> edit.putString(key, e.optString("v"))
+            }
+        }
+        edit.commit()
+        _settings.value = read()
     }
 
     private fun read(): ReaderSettings {

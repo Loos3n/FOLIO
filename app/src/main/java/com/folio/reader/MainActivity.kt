@@ -4,11 +4,15 @@ import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.net.Uri
 import android.os.Bundle
+import android.util.Log
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.core.content.IntentCompat
+import androidx.lifecycle.lifecycleScope
+import com.folio.reader.data.Backup
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import com.folio.reader.ui.FolioNavHost
 import com.folio.reader.ui.theme.FolioTheme
@@ -68,6 +72,21 @@ class MainActivity : ComponentActivity() {
             intent?.getStringExtra("open_book")?.let { openBook.value = it }
             // A file inside the app's own storage, imported as if picked (used by the CI check).
             intent?.getStringExtra("import_file")?.let { incoming.value = Uri.fromFile(java.io.File(filesDir, it)) }
+            // Back up to, or restore from, a file in the app's own storage (used by the CI check).
+            val app = application as FolioApp
+            val backup = Backup(app, app.library, app.settings, app.stats)
+            intent?.getStringExtra("backup_to")?.let { name ->
+                lifecycleScope.launch {
+                    val r = runCatching { backup.write(Uri.fromFile(java.io.File(filesDir, name))) }
+                    Log.i("FolioBackup", "backup: $r")
+                }
+            }
+            intent?.getStringExtra("restore_from")?.let { name ->
+                lifecycleScope.launch {
+                    val r = runCatching { backup.restore(Uri.fromFile(java.io.File(filesDir, name))) }
+                    Log.i("FolioBackup", "restore: $r")
+                }
+            }
         }
     }
 }
