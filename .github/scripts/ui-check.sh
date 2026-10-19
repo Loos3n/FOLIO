@@ -44,6 +44,15 @@ find_label() {
   adb shell rm -f /sdcard/ui.xml
   adb shell uiautomator dump /sdcard/ui.xml 2>&1 | tail -1 >> "$OUT/dumps.txt" || true
   adb shell cat /sdcard/ui.xml > ui.xml 2>/dev/null || true
+  # A freshly booted emulator sometimes shows "<app> isn't responding" over everything; wait it out.
+  if grep -qE "isn(&apos;|')t responding" ui.xml; then
+    local wait_xy
+    wait_xy=$(python3 -c "import re,sys;m=re.search(r'text=\"Wait\"[^>]*bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]\"',open('ui.xml',errors='ignore').read());print((int(m[1])+int(m[3]))//2,(int(m[2])+int(m[4]))//2) if m else None")
+    echo "dismissed a not-responding dialog" >> "$OUT/dumps.txt"
+    [ -n "$wait_xy" ] && [ "$wait_xy" != None ] && adb shell input tap $wait_xy
+    sleep 2
+    continue
+  fi
   xy=$(python3 - "$1" "${2:-}" <<'PY'
 import html, re, sys
 label = sys.argv[1]
