@@ -373,12 +373,11 @@ tap_label "More options"
 tap_label "Find free books"
 sleep 10
 adb exec-out screencap -p > "$OUT/60-free-books.png"
-tap_label "Science fiction"
+tap_label "Adventure"
 sleep 10
-adb exec-out screencap -p > "$OUT/61-free-scifi.png"
-tap_label "Search 70,000 free books"
-adb shell input text "pride%sand%sprejudice"; sleep 1
-adb shell input keyevent KEYCODE_BACK; sleep 10
+adb exec-out screencap -p > "$OUT/61-free-adventure.png"
+adb shell input tap $((W / 2)) $((H * 14 / 100)); sleep 1
+adb shell input text "pride%sand%sprejudice"; sleep 12
 adb exec-out screencap -p > "$OUT/62-free-search.png"
 tap_label "Add to library"
 sleep 25
@@ -392,5 +391,5 @@ adb shell dumpsys package com.svox.pico > /dev/null 2>&1 && echo "pico present" 
 adb shell settings get secure tts_default_synth >> "$OUT/tts.txt" 2>&1 || true
 
 adb logcat -d > "$OUT/logcat.txt"
-grep -iE "chromium|console|folio|AndroidRuntime" "$OUT/logcat.txt" > "$OUT/logcat-relevant.txt" || true
+grep -iE "chromium|console|folio|AndroidRuntime|FolioFree" "$OUT/logcat.txt" > "$OUT/logcat-relevant.txt" || true
 exit 0

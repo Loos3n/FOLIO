@@ -138,7 +138,7 @@ fun ListenScreen(bookId: String, onBack: () -> Unit) {
         val mark = AudioBookmark(
             id = UUID.randomUUID().toString(),
             positionMs = pos,
-            chapterTitle = audio.chapters.getOrNull(audio.chapterAt(audio.locate(pos).first, audio.locate(pos).second))?.title.orEmpty(),
+            chapterTitle = audio.chapters.getOrNull(chapterOf(audio, pos))?.title.orEmpty(),
             note = "",
             createdAt = System.currentTimeMillis(),
         )
@@ -334,7 +334,7 @@ fun ListenScreen(bookId: String, onBack: () -> Unit) {
                 val mark = justMarked
                 Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        "Bookmarked at ${clock(mark?.positionMs ?: 0)}",
+                        "Bookmarked at ${clock(intoChapter(audio, mark?.positionMs ?: 0))}",
                         style = MaterialTheme.typography.bodyMedium,
                         color = scheme.onSurfaceVariant,
                         modifier = Modifier.weight(1f),
@@ -367,6 +367,7 @@ fun ListenScreen(bookId: String, onBack: () -> Unit) {
             }
             if (sheetTab == 1) {
                 AudioBookmarkList(
+                    audio = audio,
                     marks = audio.bookmarks,
                     onOpen = { m ->
                         ensureLoaded()
@@ -413,7 +414,7 @@ fun ListenScreen(bookId: String, onBack: () -> Unit) {
         var note by remember(mark.id) { mutableStateOf(mark.note) }
         AlertDialog(
             onDismissRequest = { editingMark = null },
-            title = { Text("Note at ${clock(mark.positionMs)}") },
+            title = { Text("Note at ${clock(intoChapter(audio, mark.positionMs))}") },
             text = {
                 OutlinedTextField(
                     value = note,
@@ -477,6 +478,7 @@ fun ListenScreen(bookId: String, onBack: () -> Unit) {
 
 @Composable
 private fun AudioBookmarkList(
+    audio: AudioInfo,
     marks: List<AudioBookmark>,
     onOpen: (AudioBookmark) -> Unit,
     onEdit: (AudioBookmark) -> Unit,
@@ -502,7 +504,7 @@ private fun AudioBookmarkList(
             ) {
                 Row(Modifier.padding(start = 16.dp, top = 10.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text(clock(m.positionMs), style = MaterialTheme.typography.titleSmall, color = scheme.primary)
+                        Text(clock(intoChapter(audio, m.positionMs)), style = MaterialTheme.typography.titleSmall, color = scheme.primary)
                         if (m.chapterTitle.isNotBlank()) {
                             Text(m.chapterTitle, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
@@ -516,6 +518,17 @@ private fun AudioBookmarkList(
             }
         }
     }
+}
+
+private fun chapterOf(audio: AudioInfo, absoluteMs: Long): Int {
+    val (track, pos) = audio.locate(absoluteMs)
+    return audio.chapterAt(track, pos)
+}
+
+/** How far into its chapter a point in the book is, as the player's chapter clock shows it. */
+private fun intoChapter(audio: AudioInfo, absoluteMs: Long): Long {
+    val c = audio.chapters.getOrNull(chapterOf(audio, absoluteMs)) ?: return absoluteMs
+    return (absoluteMs - audio.absoluteOf(c)).coerceAtLeast(0)
 }
 
 private val SPEEDS = listOf(0.75f, 0.9f, 1f, 1.1f, 1.25f, 1.5f, 1.75f, 2f, 2.5f)

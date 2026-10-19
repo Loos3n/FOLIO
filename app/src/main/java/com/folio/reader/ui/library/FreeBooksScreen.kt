@@ -2,6 +2,7 @@ package com.folio.reader.ui.library
 
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.util.Log
 import android.util.LruCache
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.Image
@@ -130,7 +131,10 @@ class FreeBooksViewModel(private val app: FolioApp) : ViewModel() {
             _state.value = runCatching { FreeBooks.search(query.value, topic.value) }
                 .fold(
                     { FreeBooksState(it.books, it.next, loading = false) },
-                    { FreeBooksState(loading = false, error = true) },
+                    {
+                        Log.w("FolioFree", "search: $it")
+                        FreeBooksState(loading = false, error = true)
+                    },
                 )
         }
     }
@@ -171,6 +175,7 @@ class FreeBooksViewModel(private val app: FolioApp) : ViewModel() {
                     file.delete()
                 }
             }
+            result.onFailure { Log.w("FolioFree", "download ${book.epubUrl}: $it") }
             _getting.update { it + (book.id to (result.getOrNull()?.let { b -> Getting.Added(b.id) } ?: Getting.Failed)) }
         }
     }
@@ -186,8 +191,14 @@ private object RemoteCovers {
 
     suspend fun load(url: String): ImageBitmap? {
         cache.get(url)?.let { return it }
-        val bytes = runCatching { FreeBooks.coverBytes(url) }.getOrNull() ?: return null
-        val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap() ?: return null
+        val bytes = runCatching { FreeBooks.coverBytes(url) }
+            .onFailure { Log.w("FolioFree", "cover $url: $it") }
+            .getOrNull() ?: return null
+        val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+        if (bitmap == null) {
+            Log.w("FolioFree", "cover $url: couldn't decode ${bytes.size} bytes")
+            return null
+        }
         cache.put(url, bitmap)
         return bitmap
     }
