@@ -62,6 +62,7 @@ import androidx.lifecycle.viewModelScope
 import com.folio.reader.FolioApp
 import com.folio.reader.data.FreeBook
 import com.folio.reader.data.FreeBooks
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -113,13 +114,16 @@ class FreeBooksViewModel(private val app: FolioApp) : ViewModel() {
         reload(0)
     }
 
+    /** Searching looks through every book, so it leaves the shelf being browsed. */
     fun setQuery(q: String) {
         query.value = q
+        if (q.isNotBlank()) topic.value = null
         reload(500) // wait for a pause in typing
     }
 
     fun setTopic(t: String?) {
         topic.value = t
+        query.value = ""
         reload(0)
     }
 
@@ -128,8 +132,14 @@ class FreeBooksViewModel(private val app: FolioApp) : ViewModel() {
         searchJob = viewModelScope.launch {
             delay(delayMs)
             _state.value = FreeBooksState(loading = true)
-            _state.value = runCatching { FreeBooks.search(query.value, topic.value) }
-                .fold(
+            val result = try {
+                Result.success(FreeBooks.search(query.value, topic.value))
+            } catch (e: CancellationException) {
+                throw e // a newer search replaced this one
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+            _state.value = result.fold(
                     { FreeBooksState(it.books, it.next, loading = false) },
                     {
                         Log.w("FolioFree", "search: $it")
