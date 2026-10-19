@@ -9,6 +9,7 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import com.folio.reader.audio.AudioChapters
 import com.folio.reader.epub.EpubBook
+import com.folio.reader.pdf.PdfBook
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -149,6 +150,8 @@ data class Book(
 ) {
     val isAudio: Boolean get() = audio != null
 
+    val isPdf: Boolean get() = fileName.endsWith(".pdf")
+
     fun toJson(): JSONObject = JSONObject()
         .put("id", id)
         .put("title", title)
@@ -214,36 +217,81 @@ class LibraryRepository(private val context: Context) {
 
     fun get(id: String): Book? = _books.value.firstOrNull { it.id == id }
 
-    /** Copies the EPUB at [uri] into the library. Returns the new (or already present) book. */
+    /**
+     * Copies the EPUB or PDF at [uri] into the library, after checking it really is one.
+     * Returns the new (or already present) book.
+     */
     suspend fun import(uri: Uri): Result<Book> = withContext(Dispatchers.IO) {
         val id = UUID.randomUUID().toString()
-        val target = File(booksDir, "$id.epub")
+        val incoming = File(booksDir, "$id.part")
+        var target: File? = null
         runCatching {
             val input = context.contentResolver.openInputStream(uri)
                 ?: error("Couldn't open that file.")
-            input.use { src -> FileOutputStream(target).use { dst -> src.copyTo(dst) } }
+            input.use { src -> FileOutputStream(incoming).use { dst -> src.copyTo(dst) } }
 
-            val book = EpubBook(target).use { epub ->
-                val existing = _books.value.firstOrNull {
-                    it.title == epub.title && it.author == epub.author
-                }
-                if (existing != null) {
-                    target.delete()
-                    return@runCatching existing
-                }
-                val coverName = epub.coverPath?.let { saveCover(epub, it, id) }
-                Book(
-                    id = id,
-                    title = epub.title.ifBlank { displayName(uri) ?: "Untitled" },
-                    author = epub.author,
-                    fileName = target.name,
-                    coverFileName = coverName,
-                    addedAt = System.currentTimeMillis(),
-                )
+            val format = BookSafety.sniff(incoming)
+                ?: error("That file isn't an EPUB or PDF book, so it wasn't added.")
+            val file = File(booksDir, "$id.${format.extension}")
+            if (!incoming.renameTo(file)) error("Couldn't save the book.")
+            target = file
+            val book = when (format) {
+                BookFormat.Epub -> importEpub(file, id, uri)
+                BookFormat.Pdf -> importPdf(file, id, uri)
+            }
+            if (book.id != id) {
+                file.delete()
+                return@runCatching book
             }
             mutate { it + book }
             book
-        }.onFailure { target.delete() }
+        }.onFailure {
+            incoming.delete()
+            target?.delete()
+        }
+    }
+
+    /** The book for a checked EPUB, or the copy already in the library. */
+    private fun importEpub(file: File, id: String, uri: Uri): Book {
+        BookSafety.checkEpub(file)
+        return EpubBook(file).use { epub ->
+            _books.value.firstOrNull { it.title == epub.title && it.author == epub.author }?.let { return it }
+            val coverName = epub.coverPath?.let { saveCover(epub, it, id) }
+            Book(
+                id = id,
+                title = epub.title.ifBlank { displayName(uri) ?: "Untitled" },
+                author = epub.author,
+                fileName = file.name,
+                coverFileName = coverName,
+                addedAt = System.currentTimeMillis(),
+            )
+        }
+    }
+
+    /** The book for a PDF (titled from its file name, with its first page as the cover). */
+    private fun importPdf(file: File, id: String, uri: Uri): Book {
+        val title = (displayName(uri) ?: uri.lastPathSegment?.substringBeforeLast('.'))?.replace('_', ' ')?.trim()?.ifBlank { null } ?: "Untitled PDF"
+        val coverName = PdfBook.open(file).use { pdf ->
+            if (pdf.pageCount == 0) error("This PDF has no pages.")
+            pdf.renderCover()?.let { bitmap ->
+                val name = "$id.jpg"
+                FileOutputStream(File(coversDir, name)).use { bitmap.compress(Bitmap.CompressFormat.JPEG, 88, it) }
+                bitmap.recycle()
+                name
+            }
+        }
+        _books.value.firstOrNull { it.isPdf && it.title == title && bookFile(it).length() == file.length() }?.let {
+            coverName?.let { n -> File(coversDir, n).delete() }
+            return it
+        }
+        return Book(
+            id = id,
+            title = title,
+            author = null,
+            fileName = file.name,
+            coverFileName = coverName,
+            addedAt = System.currentTimeMillis(),
+        )
     }
 
     /**

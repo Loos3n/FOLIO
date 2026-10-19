@@ -18,6 +18,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.RenderProcessGoneDetail
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.core.tween
@@ -899,9 +900,16 @@ private fun BookWebView(
                         vm.openLink(path, url.fragment)
                         return true
                     }
-                    if (url.scheme in setOf("http", "https", "mailto")) {
+                    // Only a link the reader tapped leaves the app (not a book redirecting itself).
+                    if (request.hasGesture() && url.scheme in setOf("http", "https", "mailto")) {
                         runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, url)) }
                     }
+                    return true
+                }
+
+                // A book that crashes the page renderer closes the book, not the whole app.
+                override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                    vm.onRendererGone()
                     return true
                 }
             }
@@ -1618,7 +1626,7 @@ private fun ThemeSwatch(label: String, theme: ReaderTheme?, selected: Boolean, o
 }
 
 @Composable
-private fun ErrorView(message: String, onBack: () -> Unit, modifier: Modifier = Modifier) {
+internal fun ErrorView(message: String, onBack: () -> Unit, modifier: Modifier = Modifier) {
     Column(modifier.padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Text("Couldn't open this book", style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center)
         Spacer(Modifier.height(8.dp))
@@ -1630,7 +1638,7 @@ private fun ErrorView(message: String, onBack: () -> Unit, modifier: Modifier = 
 
 /** Immersive reading: hide the system bars with the controls, and match their icon colour to the page. */
 @Composable
-private fun SystemBarsEffect(visible: Boolean, darkContent: Boolean) {
+internal fun SystemBarsEffect(visible: Boolean, darkContent: Boolean) {
     val view = LocalView.current
     val systemDark = isSystemInDarkTheme()
     val window = remember(view) { view.context.findActivity()?.window } ?: return

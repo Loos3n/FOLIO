@@ -389,6 +389,54 @@ adb shell run-as $PKG cat files/library.json > "$OUT/library-free.json" || true
 
 fi
 
+if part files; then
+# PDFs, and files that only pretend to be books.
+python3 .github/scripts/make-test-files.py .
+for f in Sample_Report.pdf hostile.epub not-a-book.epub; do
+  adb push "$f" "/data/local/tmp/$f"
+  adb shell chmod 644 "/data/local/tmp/$f"
+  adb shell run-as $PKG cp "/data/local/tmp/$f" "files/$f"
+done
+adb shell am force-stop $PKG; sleep 1
+adb shell am start -W -n $PKG/.MainActivity --es import_file Sample_Report.pdf
+sleep 8
+adb exec-out screencap -p > "$OUT/70-pdf-opened.png"
+adb shell input tap $((W / 2)) $((H / 2)); sleep 1
+adb exec-out screencap -p > "$OUT/71-pdf-controls.png"
+tap_label "Bookmark this page"
+adb shell input tap $((W / 2)) $((H / 2)); sleep 2
+adb shell input swipe $((W / 2)) $((H * 8 / 10)) $((W / 2)) $((H * 2 / 10)) 400; sleep 1
+adb shell input swipe $((W / 2)) $((H * 8 / 10)) $((W / 2)) $((H * 2 / 10)) 400; sleep 2
+adb exec-out screencap -p > "$OUT/72-pdf-scrolled.png"
+# Double tap to zoom in, then drag sideways.
+adb shell "input tap $((W / 3)) $((H / 2)) & sleep 0.1; input tap $((W / 3)) $((H / 2))"; sleep 3
+adb exec-out screencap -p > "$OUT/73-pdf-zoomed.png"
+adb shell input swipe $((W * 7 / 10)) $((H / 2)) $((W * 3 / 10)) $((H / 2)) 300; sleep 3
+adb exec-out screencap -p > "$OUT/74-pdf-panned.png"
+adb shell "input tap $((W / 2)) $((H / 2)) & sleep 0.1; input tap $((W / 2)) $((H / 2))"; sleep 3
+adb shell input tap $((W / 2)) $((H / 2)); sleep 2
+tap_label "Bookmarks"
+sleep 1
+adb exec-out screencap -p > "$OUT/75-pdf-bookmarks.png"
+adb shell input keyevent KEYCODE_BACK; sleep 1
+adb shell input keyevent KEYCODE_BACK; sleep 2
+adb shell run-as $PKG cat files/library.json > "$OUT/library-pdf.json" || true
+adb exec-out screencap -p > "$OUT/76-library-with-pdf.png"
+# A program renamed to .epub is turned away.
+adb shell am start -W -n $PKG/.MainActivity --es import_file not-a-book.epub
+sleep 3
+adb exec-out screencap -p > "$OUT/77-not-a-book.png"
+# A book full of scripts opens as plain text, and nothing in it runs.
+adb logcat -c
+adb shell am start -W -n $PKG/.MainActivity --es import_file hostile.epub
+sleep 8
+adb exec-out screencap -p > "$OUT/78-hostile-book.png"
+sleep 4
+adb exec-out screencap -p > "$OUT/79-hostile-later.png"
+adb shell dumpsys activity activities | grep -E "mResumedActivity|topResumedActivity" > "$OUT/79-top-activity.txt" || true
+adb logcat -d | grep -iE "Content.Security|Refused|CONSOLE" > "$OUT/79-blocked.txt" || true
+fi
+
 adb shell dumpsys package com.svox.pico > /dev/null 2>&1 && echo "pico present" >> "$OUT/tts.txt"
 adb shell settings get secure tts_default_synth >> "$OUT/tts.txt" 2>&1 || true
 

@@ -23,6 +23,7 @@ import com.folio.reader.ui.library.FreeBooksViewModel
 import com.folio.reader.ui.library.LibraryScreen
 import com.folio.reader.ui.library.LibraryViewModel
 import com.folio.reader.ui.listen.ListenScreen
+import com.folio.reader.ui.reader.PdfReaderScreen
 import com.folio.reader.ui.reader.ReaderScreen
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.filterNotNull
@@ -37,10 +38,15 @@ fun FolioNavHost(incoming: MutableStateFlow<Uri?>, openBook: MutableStateFlow<St
         },
     )
 
-    // Audiobooks open in the player, everything else in the reader.
+    // Audiobooks open in the player, PDFs in the page viewer, everything else in the reader.
     val open: (String) -> Unit = { id ->
-        val audio = libraryVm.allBooks.value.firstOrNull { it.id == id }?.isAudio == true
-        nav.navigate(if (audio) "listen/$id" else "reader/$id") { launchSingleTop = true }
+        val book = libraryVm.allBooks.value.firstOrNull { it.id == id }
+        val route = when {
+            book?.isAudio == true -> "listen/$id"
+            book?.isPdf == true -> "pdf/$id"
+            else -> "reader/$id"
+        }
+        nav.navigate(route) { launchSingleTop = true }
     }
 
     LaunchedEffect(Unit) {
@@ -87,6 +93,13 @@ fun FolioNavHost(incoming: MutableStateFlow<Uri?>, openBook: MutableStateFlow<St
         ) { entry ->
             val bookId = entry.arguments?.getString("bookId") ?: return@composable
             ReaderScreen(bookId = bookId, onBack = { nav.popBackStack() })
+        }
+        composable(
+            "pdf/{bookId}",
+            arguments = listOf(navArgument("bookId") { type = NavType.StringType }),
+        ) { entry ->
+            val bookId = entry.arguments?.getString("bookId") ?: return@composable
+            PdfReaderScreen(bookId = bookId, onBack = { nav.popBackStack() })
         }
         composable(
             "listen/{bookId}",

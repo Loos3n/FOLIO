@@ -1,5 +1,6 @@
 package com.folio.reader.epub
 
+import com.folio.reader.data.BookSafety
 import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserFactory
 import java.io.Closeable
@@ -74,7 +75,7 @@ class EpubBook(file: File) : Closeable {
 
     fun open(path: String): InputStream? = zip.getEntry(path)?.let { zip.getInputStream(it) }
 
-    fun readBytes(path: String): ByteArray? = open(path)?.use { it.readBytes() }
+    fun readBytes(path: String): ByteArray? = open(path)?.use { BookSafety.readLimited(it) }
 
     fun itemForPath(path: String): ManifestItem? = itemsByPath[path]
 

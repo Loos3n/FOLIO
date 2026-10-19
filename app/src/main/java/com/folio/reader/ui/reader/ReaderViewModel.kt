@@ -109,6 +109,11 @@ class ReaderViewModel(private val app: FolioApp, private val bookId: String) : V
     /** For learning reading speed: a recent place in the text and when the reader was there. */
     private var speedMark: Triple<Int, Int, Long>? = null
 
+    /** The page renderer stopped (a broken or hostile book can do this); show an error instead. */
+    fun onRendererGone() {
+        _state.update { it.copy(error = "Part of this book couldn't be shown safely, so it was closed.") }
+    }
+
     init {
         viewModelScope.launch {
             val entry = library.get(bookId)

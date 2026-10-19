@@ -131,7 +131,7 @@ class LibraryViewModel(private val app: FolioApp) : ViewModel() {
             var added = 0
             var lastBook: Book? = null
             val failures = ArrayList<String>()
-            // Audio files picked together make up one audiobook; each EPUB is its own book.
+            // Audio files picked together make up one audiobook; each EPUB or PDF is its own book.
             val (audio, epubs) = withContext(Dispatchers.IO) { uris.partition { library.isAudio(it) } }
             if (audio.isNotEmpty()) {
                 library.importAudio(audio)

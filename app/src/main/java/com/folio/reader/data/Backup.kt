@@ -36,6 +36,8 @@ class Backup(
         const val MIME = "application/zip"
         private const val INDEX = "folio-backup.json"
         private const val VERSION = 1
+        /** Largest single book or cover a backup may unpack (guards against a doctored backup filling storage). */
+        private const val MAX_FILE_BYTES = 2L * 1024 * 1024 * 1024
 
         fun suggestedName() = "Folio backup ${LocalDate.now()}.zip"
     }
@@ -84,8 +86,10 @@ class Backup(
                     val name = entry.name
                     when {
                         entry.isDirectory -> Unit
-                        name == INDEX -> index = runCatching { JSONObject(zip.readBytes().toString(Charsets.UTF_8)) }.getOrNull()
-                        safeFile(name) -> FileOutputStream(File(dir, name).apply { parentFile?.mkdirs() }).use { zip.copyTo(it) }
+                        name == INDEX -> index = runCatching { JSONObject(BookSafety.readLimited(zip, 64L * 1024 * 1024).toString(Charsets.UTF_8)) }.getOrNull()
+                        safeFile(name) -> FileOutputStream(File(dir, name).apply { parentFile?.mkdirs() }).use {
+                            BookSafety.copyLimited(zip, it, MAX_FILE_BYTES)
+                        }
                     }
                 }
             }

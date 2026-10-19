@@ -5,7 +5,7 @@ on:
       - "app/**"
       - "gradle/**"
       - "*.gradle.kts"
-      - ".github/scripts/ui-check.sh"
+      - ".github/scripts/**"
       - ".github/workflows/ui-check.yml"
   workflow_dispatch:
 permissions:
@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        part: [reading, listening, freebooks]
+        part: [reading, listening, freebooks, files]
     name: emulator (${{ matrix.part }})
     runs-on: ubuntu-latest
     timeout-minutes: 40

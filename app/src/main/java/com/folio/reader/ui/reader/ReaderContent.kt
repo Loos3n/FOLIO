@@ -72,12 +72,29 @@ object ReaderContent {
         if (isDocument) {
             val bytes = book.readBytes(path) ?: return notFound()
             val html = inject(String(bytes, Charsets.UTF_8), cssFor(), startFor(path))
-            return WebResourceResponse(mediaType, "UTF-8", ByteArrayInputStream(html.toByteArray()))
+            return fromBook(mediaType, "UTF-8", ByteArrayInputStream(html.toByteArray()))
         }
         val stream = book.open(path) ?: return notFound()
         val encoding = if (mediaType.startsWith("text/")) "UTF-8" else null
-        return WebResourceResponse(mediaType, encoding, stream)
+        return fromBook(mediaType, encoding, stream)
     }
+
+    /**
+     * Everything from inside a book carries this policy: only Folio's own page script may
+     * run, so scripts a book brings (inline, in files, or in onclick-style attributes) are
+     * ignored and can't reach the app, and nothing can load from or send to the internet.
+     */
+    private const val BOOK_POLICY = "default-src $ORIGIN data: blob:; " +
+        "script-src $ORIGIN$INTERNAL; " +
+        "style-src $ORIGIN 'unsafe-inline'; " +
+        "object-src 'none'; frame-src 'none'; worker-src 'none'; " +
+        "form-action 'none'; base-uri 'none'"
+
+    private fun fromBook(mediaType: String, encoding: String?, data: java.io.InputStream) = WebResourceResponse(
+        mediaType, encoding, 200, "OK",
+        mapOf("Content-Security-Policy" to BOOK_POLICY, "X-Content-Type-Options" to "nosniff"),
+        data,
+    )
 
     fun blocked() = WebResourceResponse("text/plain", "UTF-8", 403, "Blocked", emptyMap(), ByteArrayInputStream(ByteArray(0)))
 

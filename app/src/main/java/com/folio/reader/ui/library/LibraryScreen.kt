@@ -100,8 +100,8 @@ import com.folio.reader.data.Book
 import java.util.Calendar
 import kotlin.math.roundToInt
 
-/** EPUBs, and audio files for audiobooks (M4B files often come through as octet-stream). */
-private val BOOK_TYPES = arrayOf("application/epub+zip", "application/octet-stream", "audio/*")
+/** EPUBs, PDFs, and audio files for audiobooks (M4B files often come through as octet-stream). */
+private val BOOK_TYPES = arrayOf("application/epub+zip", "application/pdf", "application/octet-stream", "audio/*")
 internal val CoverShape = RoundedCornerShape(topStart = 4.dp, bottomStart = 4.dp, topEnd = 10.dp, bottomEnd = 10.dp)
 
 @Composable
@@ -822,7 +822,7 @@ private fun EmptyLibrary(importing: Boolean, onAdd: () -> Unit, onFindFree: () -
         Text("Start your library", style = MaterialTheme.typography.headlineMedium, textAlign = TextAlign.Center)
         Spacer(Modifier.height(8.dp))
         Text(
-            "Add EPUB books or audiobooks from your phone and they'll appear here, ready to read or listen to.",
+            "Add EPUB or PDF books, or audiobooks, from your phone and they'll appear here, ready to read or listen to.",
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
