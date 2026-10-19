@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
@@ -35,6 +36,11 @@ sealed interface LibraryEvent {
 }
 
 class LibraryViewModel(private val app: FolioApp) : ViewModel() {
+    companion object {
+        /** A backup to restore as if picked in the library (debug builds; used by the CI check). */
+        val pendingRestore = MutableStateFlow<Uri?>(null)
+    }
+
     private val library = app.library
 
     val allBooks: StateFlow<List<Book>> = library.books
@@ -156,6 +162,15 @@ class LibraryViewModel(private val app: FolioApp) : ViewModel() {
     }
 
     private val backup = Backup(app, library, app.settings, app.stats)
+
+    init {
+        viewModelScope.launch {
+            pendingRestore.filterNotNull().collect {
+                pendingRestore.value = null
+                restore(it)
+            }
+        }
+    }
 
     fun backupName() = Backup.suggestedName()
 

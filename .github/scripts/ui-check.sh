@@ -325,6 +325,8 @@ adb shell run-as $PKG cat files/library.json > "$OUT/library-speech.json" || tru
 # Backup and restore: back up, empty the library, restore twice (the second should only
 # update), with the audiobook's audio file gone so it's reported as needing re-adding.
 adb shell am force-stop $PKG; sleep 1
+printf '%s' '[{"id":"test","title":"Crime and Punishment","author":"Fyodor Dostoyevsky","fileName":"test.epub","coverFileName":null,"addedAt":1,"lastOpenedAt":5,"progress":0.02,"chapterIndex":3,"chapterOffset":0.25,"bookmarks":[{"id":"b1","chapterIndex":3,"chapterOffset":0.25,"progress":0.02,"chapterTitle":"PART I","snippet":"On an exceptionally hot evening","createdAt":2}],"highlights":[{"id":"h1","chapterIndex":3,"start":10,"end":40,"text":"exceptionally hot evening","color":"green","note":"Restored note","progress":0.02,"chapterTitle":"PART I","createdAt":3}],"collections":["Russian"]},{"id":"aud","title":"Test Audiobook","author":"Folio","fileName":"","coverFileName":null,"addedAt":4,"lastOpenedAt":6,"progress":0.4,"audio":{"tracks":[{"uri":"file:///data/user/0/com.folio.reader/files/gone.m4b","title":"gone","durationMs":60000}],"chapters":[{"title":"One","track":0,"startMs":0}],"track":0,"positionMs":24000,"speed":1.5}}]' \
+  | adb exec-in run-as $PKG sh -c 'cat > files/library.json'
 adb shell am start -W -n $PKG/.MainActivity
 sleep 4
 tap_label "More options"
@@ -335,12 +337,15 @@ sleep 10
 adb shell run-as $PKG ls -l files/ > "$OUT/51-files.txt" 2>&1 || true
 adb shell run-as $PKG unzip -l files/backup.zip >> "$OUT/51-files.txt" 2>&1 || true
 adb shell am force-stop $PKG
-adb shell run-as $PKG sh -c 'rm -rf files/library.json files/books/* files/covers/* files/stats.json files/book.m4b shared_prefs/reader_settings.xml'
+adb shell "run-as $PKG sh -c 'rm -rf files/library.json files/books/* files/covers/* files/stats.json files/book.m4b shared_prefs/reader_settings.xml'"
 adb shell am start -W -n $PKG/.MainActivity
 sleep 4
 adb exec-out screencap -p > "$OUT/52-empty-library.png"
-adb shell am start -W -n $PKG/.MainActivity --es restore_from backup.zip
+# Through the app's own restore, so the summary dialog shows.
+adb shell am start -W -n $PKG/.MainActivity --es restore_from backup.zip --ez restore_in_app true
 sleep 10
+adb exec-out screencap -p > "$OUT/53-restore-dialog.png"
+tap_label "OK"
 adb exec-out screencap -p > "$OUT/53-restored-library.png"
 adb shell run-as $PKG cat files/library.json > "$OUT/library-restored.json" || true
 adb shell run-as $PKG cat files/stats.json > "$OUT/stats-restored.json" || true

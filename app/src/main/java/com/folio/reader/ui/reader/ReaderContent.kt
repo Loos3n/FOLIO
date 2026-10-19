@@ -424,11 +424,19 @@ object ReaderContent {
           // The WebView can load a chapter before it has been given a size; only lay out
           // pages (and tell the app we're ready) once the viewport is real.
           var loaded = false;
+          // After the next frame is drawn, or shortly if none is: with the screen off the
+          // WebView draws nothing, and read-aloud still needs the next chapter laid out.
+          function nextFrame(fn) {
+            var done = false;
+            function once() { if (!done) { done = true; fn(); } }
+            requestAnimationFrame(once);
+            setTimeout(once, 100);
+          }
           function hasSize() { return width() > 10 && window.innerHeight > 10; }
           function finishLoad() {
             if (ready || !loaded || !hasSize()) return;
             restore();
-            requestAnimationFrame(function () {
+            nextFrame(function () {
               restore();
               fragment = '';
               target = null;
@@ -445,7 +453,7 @@ object ReaderContent {
             if (!ready) { finishLoad(); return; }
             var o = offset();
             setWidthVar();
-            requestAnimationFrame(function () {
+            nextFrame(function () {
               if (scrollMode) scrollToY(o * readMax(), false); else show(Math.round(o * lastPage()), false);
               drawHighlights();
             });
@@ -930,13 +938,13 @@ object ReaderContent {
             restoreTo: function (o) {
               setWidthVar();
               if (scrollMode) {
-                requestAnimationFrame(function () {
+                nextFrame(function () {
                   scrollToY(o * readMax(), false);
                   setTimeout(function () { scrollToY(o * readMax(), false); drawHighlights(); }, 80);
                 });
                 return;
               }
-              requestAnimationFrame(function () {
+              nextFrame(function () {
                 show(Math.round(o * lastPage()), false);
                 setTimeout(function () { show(Math.round(o * lastPage()), false); drawHighlights(); }, 80);
               });

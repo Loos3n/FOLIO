@@ -12,6 +12,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.core.content.IntentCompat
 import androidx.lifecycle.lifecycleScope
 import com.folio.reader.data.Backup
+import com.folio.reader.ui.library.LibraryViewModel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import com.folio.reader.ui.FolioNavHost
@@ -82,6 +83,10 @@ class MainActivity : ComponentActivity() {
                 }
             }
             intent?.getStringExtra("restore_from")?.let { name ->
+                if (intent.getBooleanExtra("restore_in_app", false)) {
+                    LibraryViewModel.pendingRestore.value = Uri.fromFile(java.io.File(filesDir, name))
+                    return@let
+                }
                 lifecycleScope.launch {
                     val r = runCatching { backup.restore(Uri.fromFile(java.io.File(filesDir, name))) }
                     Log.i("FolioBackup", "restore: $r")
