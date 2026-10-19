@@ -4,6 +4,11 @@
     <!-- Only for looking words up in the dictionary; books themselves never reach the network. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- Audiobooks keep playing in the background, with a media notification. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
     <!-- Lets read-aloud find the phone's text-to-speech engine (Android 11+). -->
     <queries>
         <intent>
@@ -44,5 +49,14 @@
                 <data android:mimeType="application/epub+zip" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".audio.PlaybackService"
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaSessionService" />
+            </intent-filter>
+        </service>
     </application>
 </manifest>

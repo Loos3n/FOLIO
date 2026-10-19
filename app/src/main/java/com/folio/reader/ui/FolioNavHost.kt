@@ -20,6 +20,7 @@ import androidx.navigation.navArgument
 import com.folio.reader.FolioApp
 import com.folio.reader.ui.library.LibraryScreen
 import com.folio.reader.ui.library.LibraryViewModel
+import com.folio.reader.ui.listen.ListenScreen
 import com.folio.reader.ui.reader.ReaderScreen
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.filterNotNull
@@ -34,6 +35,12 @@ fun FolioNavHost(incoming: MutableStateFlow<Uri?>, openBook: MutableStateFlow<St
         },
     )
 
+    // Audiobooks open in the player, everything else in the reader.
+    val open: (String) -> Unit = { id ->
+        val audio = libraryVm.allBooks.value.firstOrNull { it.id == id }?.isAudio == true
+        nav.navigate(if (audio) "listen/$id" else "reader/$id") { launchSingleTop = true }
+    }
+
     LaunchedEffect(Unit) {
         incoming.filterNotNull().collect { uri ->
             incoming.value = null
@@ -45,7 +52,7 @@ fun FolioNavHost(incoming: MutableStateFlow<Uri?>, openBook: MutableStateFlow<St
     LaunchedEffect(Unit) {
         openBook.filterNotNull().collect { id ->
             openBook.value = null
-            nav.navigate("reader/$id") { launchSingleTop = true }
+            open(id)
         }
     }
 
@@ -60,7 +67,7 @@ fun FolioNavHost(incoming: MutableStateFlow<Uri?>, openBook: MutableStateFlow<St
         composable("library") {
             LibraryScreen(
                 vm = libraryVm,
-                onOpen = { id -> nav.navigate("reader/$id") { launchSingleTop = true } },
+                onOpen = open,
             )
         }
         composable(
@@ -69,6 +76,13 @@ fun FolioNavHost(incoming: MutableStateFlow<Uri?>, openBook: MutableStateFlow<St
         ) { entry ->
             val bookId = entry.arguments?.getString("bookId") ?: return@composable
             ReaderScreen(bookId = bookId, onBack = { nav.popBackStack() })
+        }
+        composable(
+            "listen/{bookId}",
+            arguments = listOf(navArgument("bookId") { type = NavType.StringType }),
+        ) { entry ->
+            val bookId = entry.arguments?.getString("bookId") ?: return@composable
+            ListenScreen(bookId = bookId, onBack = { nav.popBackStack() })
         }
     }
 }

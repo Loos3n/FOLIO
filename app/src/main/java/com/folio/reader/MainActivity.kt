@@ -14,6 +14,9 @@ import com.folio.reader.ui.FolioNavHost
 import com.folio.reader.ui.theme.FolioTheme
 
 class MainActivity : ComponentActivity() {
+    companion object {
+        const val EXTRA_OPEN_AUDIO = "com.folio.reader.OPEN_AUDIO"
+    }
 
     /** EPUBs handed to us by other apps ("Open with" / "Share"), waiting to be imported. */
     private val incoming = MutableStateFlow<Uri?>(null)
@@ -56,8 +59,16 @@ class MainActivity : ComponentActivity() {
             else -> null
         }
         if (uri != null) incoming.value = uri
+        // From the playback notification: back to the audiobook that's playing.
+        if (intent?.getBooleanExtra(EXTRA_OPEN_AUDIO, false) == true) {
+            (application as FolioApp).audio.state.value.bookId?.let { openBook.value = it }
+        }
         val debuggable = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
-        if (debuggable) intent?.getStringExtra("open_book")?.let { openBook.value = it }
+        if (debuggable) {
+            intent?.getStringExtra("open_book")?.let { openBook.value = it }
+            // A file inside the app's own storage, imported as if picked (used by the CI check).
+            intent?.getStringExtra("import_file")?.let { incoming.value = Uri.fromFile(java.io.File(filesDir, it)) }
+        }
     }
 }
 

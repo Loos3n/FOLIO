@@ -1,6 +1,7 @@
 package com.folio.reader
 
 import android.app.Application
+import com.folio.reader.audio.AudioPlayer
 import com.folio.reader.data.LibraryRepository
 import com.folio.reader.data.ReadingStats
 import com.folio.reader.data.SettingsRepository
@@ -15,6 +16,8 @@ class FolioApp : Application() {
         private set
     lateinit var stats: ReadingStats
         private set
+    /** Created on first use, on the main thread. */
+    val audio: AudioPlayer by lazy { AudioPlayer(this) }
 
     /** For writes that must finish even after the screen that started them is gone. */
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)

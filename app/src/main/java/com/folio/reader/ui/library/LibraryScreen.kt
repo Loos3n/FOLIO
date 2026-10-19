@@ -75,6 +75,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import com.folio.reader.FolioApp
+import com.folio.reader.audio.ListenState
+import com.folio.reader.ui.listen.ListenIcons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
@@ -90,7 +97,8 @@ import com.folio.reader.data.Book
 import java.util.Calendar
 import kotlin.math.roundToInt
 
-private val EPUB_TYPES = arrayOf("application/epub+zip", "application/octet-stream")
+/** EPUBs, and audio files for audiobooks (M4B files often come through as octet-stream). */
+private val BOOK_TYPES = arrayOf("application/epub+zip", "application/octet-stream", "audio/*")
 private val CoverShape = RoundedCornerShape(topStart = 4.dp, bottomStart = 4.dp, topEnd = 10.dp, bottomEnd = 10.dp)
 
 @Composable
@@ -115,7 +123,10 @@ fun LibraryScreen(
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris: List<Uri> ->
         vm.import(uris)
     }
-    val pickBooks = { picker.launch(EPUB_TYPES) }
+    val pickBooks = { picker.launch(BOOK_TYPES) }
+    val app = LocalContext.current.applicationContext as FolioApp
+    val listening by app.audio.state.collectAsStateWithLifecycle()
+    val playingBook = allBooks.firstOrNull { it.id == listening.bookId }
 
     LaunchedEffect(vm) {
         vm.events.collect { event ->
@@ -140,7 +151,19 @@ fun LibraryScreen(
                     text = { Text("Add books") },
                     containerColor = MaterialTheme.colorScheme.primary,
                     contentColor = MaterialTheme.colorScheme.onPrimary,
-                    modifier = Modifier.padding(WindowInsets.navigationBars.asPaddingValues()),
+                    modifier = if (playingBook == null) Modifier.padding(WindowInsets.navigationBars.asPaddingValues()) else Modifier,
+                )
+            }
+        },
+        bottomBar = {
+            if (playingBook != null) {
+                MiniPlayer(
+                    book = playingBook,
+                    state = listening,
+                    cover = vm.coverFile(playingBook),
+                    onOpen = { onOpen(playingBook.id) },
+                    onToggle = app.audio::toggle,
+                    onClose = app.audio::stop,
                 )
             }
         },
@@ -444,7 +467,7 @@ private fun ContinueCard(book: Book, vm: LibraryViewModel, onOpen: (String) -> U
                     )
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "${(book.progress * 100).roundToInt()}% read",
+                        "${(book.progress * 100).roundToInt()}% " + if (book.isAudio) "listened" else "read",
                         style = MaterialTheme.typography.labelMedium,
                         color = scheme.onPrimaryContainer.copy(alpha = 0.8f),
                     )
@@ -517,6 +540,20 @@ private fun BookTile(
                     .combinedClickable(onClick = onOpen, onLongClick = { menuOpen = true }),
             ) {
                 BookCover(book.title, book.author, vm.coverFile(book), Modifier.fillMaxSize())
+                if (book.isAudio) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
+                        contentColor = MaterialTheme.colorScheme.onSurface,
+                        shape = CircleShape,
+                        modifier = Modifier.align(Alignment.BottomStart).padding(6.dp),
+                    ) {
+                        Icon(
+                            ListenIcons.Headphones,
+                            contentDescription = "Audiobook",
+                            modifier = Modifier.padding(5.dp).size(14.dp),
+                        )
+                    }
+                }
                 when {
                     book.isFinished() -> Badge("Finished", Modifier.align(Alignment.TopEnd), icon = true)
                     book.lastOpenedAt == 0L -> Badge("New", Modifier.align(Alignment.TopEnd))
@@ -591,6 +628,59 @@ private fun BookTile(
     }
 }
 
+/** The audiobook that's loaded, along the bottom of the library: tap to open, or play and pause from here. */
+@Composable
+private fun MiniPlayer(
+    book: Book,
+    state: ListenState,
+    cover: java.io.File?,
+    onOpen: () -> Unit,
+    onToggle: () -> Unit,
+    onClose: () -> Unit,
+) {
+    val audio = book.audio ?: return
+    Surface(
+        onClick = onOpen,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shadowElevation = 8.dp,
+        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+    ) {
+        Column(Modifier.navigationBarsPadding()) {
+            LinearProgressIndicator(
+                progress = { if (state.totalMs > 0) state.positionMs.toFloat() / state.totalMs else 0f },
+                modifier = Modifier.fillMaxWidth().height(2.dp),
+                trackColor = Color.Transparent,
+            )
+            Row(
+                Modifier.padding(start = 16.dp, end = 8.dp, top = 10.dp, bottom = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                BookCover(book.title, book.author, cover, Modifier.size(44.dp).clip(RoundedCornerShape(8.dp)))
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(book.title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        audio.chapters.getOrNull(state.chapter)?.title.orEmpty(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                IconButton(onClick = onToggle) {
+                    Icon(
+                        if (state.playing) ListenIcons.Pause else ListenIcons.Play,
+                        contentDescription = if (state.playing) "Pause" else "Play",
+                    )
+                }
+                IconButton(onClick = onClose) {
+                    Icon(Icons.Filled.Close, contentDescription = "Close player")
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun Badge(text: String, modifier: Modifier = Modifier, icon: Boolean = false) {
     Surface(
@@ -651,7 +741,7 @@ private fun EmptyLibrary(importing: Boolean, onAdd: () -> Unit, modifier: Modifi
         Text("Start your library", style = MaterialTheme.typography.headlineMedium, textAlign = TextAlign.Center)
         Spacer(Modifier.height(8.dp))
         Text(
-            "Add EPUB books from your phone and they'll appear here, ready to read.",
+            "Add EPUB books or audiobooks from your phone and they'll appear here, ready to read or listen to.",
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,

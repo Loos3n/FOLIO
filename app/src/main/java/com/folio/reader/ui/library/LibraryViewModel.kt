@@ -16,6 +16,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
 
 enum class Shelf(val label: String) { All("All"), Reading("Reading"), Unread("Not started"), Finished("Finished") }
 
@@ -120,7 +122,14 @@ class LibraryViewModel(private val app: FolioApp) : ViewModel() {
             var added = 0
             var lastBook: Book? = null
             val failures = ArrayList<String>()
-            for (uri in uris) {
+            // Audio files picked together make up one audiobook; each EPUB is its own book.
+            val (audio, epubs) = withContext(Dispatchers.IO) { uris.partition { library.isAudio(it) } }
+            if (audio.isNotEmpty()) {
+                library.importAudio(audio)
+                    .onSuccess { added++; lastBook = it }
+                    .onFailure { failures += it.message ?: "Unknown error" }
+            }
+            for (uri in epubs) {
                 library.import(uri)
                     .onSuccess { added++; lastBook = it }
                     .onFailure { failures += it.message ?: "Unknown error" }

@@ -233,6 +233,70 @@ tap_label "Save"
 adb exec-out screencap -p > "$OUT/19-collection.png"
 adb shell run-as $PKG cat files/stats.json > "$OUT/stats.json" || true
 
+# Audiobooks: an M4B with chapters and cover art, imported as if picked, then played.
+command -v ffmpeg > /dev/null || { sudo apt-get update -q && sudo apt-get install -y -q ffmpeg; }
+cat > chapters.txt <<'META'
+;FFMETADATA1
+title=The Test Audiobook
+artist=Ada Author
+album=The Test Audiobook
+[CHAPTER]
+TIMEBASE=1/1000
+START=0
+END=20000
+title=Opening Credits
+[CHAPTER]
+TIMEBASE=1/1000
+START=20000
+END=200000
+title=Chapter One: The Start
+[CHAPTER]
+TIMEBASE=1/1000
+START=200000
+END=400000
+title=Chapter Two: The Middle
+[CHAPTER]
+TIMEBASE=1/1000
+START=400000
+END=600000
+title=Chapter Three: The End
+META
+ffmpeg -loglevel error -y -f lavfi -i "sine=frequency=330:duration=600" -f lavfi -i "color=c=0x2F4858:s=600x600,drawbox=x=60:y=60:w=480:h=480:color=0xF6AE2D:t=8" -frames:v 1 cover.png
+ffmpeg -loglevel error -y -i cover.png -f lavfi -i "sine=frequency=330:duration=600" -i chapters.txt \
+  -map 1:a -map 0:v -map_metadata 2 -map_chapters 2 -c:a aac -b:a 32k -c:v copy -disposition:v attached_pic book.m4b \
+  || ffmpeg -loglevel error -y -f lavfi -i "sine=frequency=330:duration=600" -i chapters.txt -map_metadata 1 -map_chapters 1 -c:a aac -b:a 32k book.m4b
+ls -la book.m4b
+adb push book.m4b /data/local/tmp/book.m4b
+adb shell chmod 644 /data/local/tmp/book.m4b
+adb shell run-as $PKG cp /data/local/tmp/book.m4b files/book.m4b
+adb shell am start -W -n $PKG/.MainActivity --es import_file book.m4b
+sleep 6
+adb exec-out screencap -p > "$OUT/30-audiobook.png"
+tap_label "Play"
+sleep 6
+adb exec-out screencap -p > "$OUT/31-playing.png"
+tap_label "Forward 30 seconds"
+sleep 2
+adb exec-out screencap -p > "$OUT/32-after-skip.png"
+tap_label "Chapters"
+adb exec-out screencap -p > "$OUT/33-chapters.png"
+tap_label "Chapter Two: The Middle"
+sleep 2
+tap_label "Speed"
+tap_label "1.5×"
+tap_label "Sleep"
+tap_label "End of chapter"
+sleep 2
+adb exec-out screencap -p > "$OUT/34-speed-sleep.png"
+adb shell cmd statusbar expand-notifications; sleep 3
+adb exec-out screencap -p > "$OUT/35-notification.png"
+adb shell cmd statusbar collapse; sleep 1
+adb shell input keyevent KEYCODE_BACK; sleep 3
+adb exec-out screencap -p > "$OUT/36-library-mini-player.png"
+adb shell input keyevent KEYCODE_HOME; sleep 8
+adb shell dumpsys media_session > "$OUT/media-session.txt" 2>&1 || true
+adb shell run-as $PKG cat files/library.json > "$OUT/library-audio.json" || true
+
 adb shell dumpsys package com.svox.pico > /dev/null 2>&1 && echo "pico present" >> "$OUT/tts.txt"
 adb shell settings get secure tts_default_synth >> "$OUT/tts.txt" 2>&1 || true
 

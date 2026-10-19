@@ -1,10 +1,13 @@
 package com.folio.reader.data
 
 import android.content.Context
+import android.content.Intent
+import android.media.MediaMetadataRetriever
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.provider.OpenableColumns
+import com.folio.reader.audio.AudioChapters
 import com.folio.reader.epub.EpubBook
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -17,6 +20,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.util.UUID
 
@@ -131,7 +135,11 @@ data class Book(
     val collections: List<String> = emptyList(),
     /** Read by scrolling (true) or in pages (false); null follows the reader's default. */
     val scrollMode: Boolean? = null,
+    /** Set for audiobooks: their tracks, chapters and listening position. */
+    val audio: AudioInfo? = null,
 ) {
+    val isAudio: Boolean get() = audio != null
+
     fun toJson(): JSONObject = JSONObject()
         .put("id", id)
         .put("title", title)
@@ -147,6 +155,7 @@ data class Book(
         .put("highlights", JSONArray().apply { highlights.forEach { put(it.toJson()) } })
         .put("collections", JSONArray(collections))
         .put("scrollMode", scrollMode ?: JSONObject.NULL)
+        .put("audio", audio?.toJson() ?: JSONObject.NULL)
 
     companion object {
         fun fromJson(o: JSONObject) = Book(
@@ -168,6 +177,7 @@ data class Book(
             }.orEmpty(),
             collections = o.optJSONArray("collections")?.let { a -> List(a.length()) { a.getString(it) } }.orEmpty(),
             scrollMode = if (o.has("scrollMode") && !o.isNull("scrollMode")) o.optBoolean("scrollMode") else null,
+            audio = o.optJSONObject("audio")?.let { AudioInfo.fromJson(it) },
         )
     }
 }
@@ -177,6 +187,9 @@ data class Book(
  * JSON file. Small enough that a database would be overkill, and it loads instantly.
  */
 class LibraryRepository(private val context: Context) {
+    companion object {
+        val AUDIO_EXTENSIONS = setOf("mp3", "m4a", "m4b", "aac", "ogg", "oga", "opus", "flac", "wav")
+    }
 
     private val booksDir = File(context.filesDir, "books").apply { mkdirs() }
     private val coversDir = File(context.filesDir, "covers").apply { mkdirs() }
@@ -224,10 +237,106 @@ class LibraryRepository(private val context: Context) {
         }.onFailure { target.delete() }
     }
 
+    /**
+     * Adds an audiobook made of the audio files at [uris] (one file, or several played in
+     * name order). The files are played from where they are rather than copied, since
+     * audiobooks are often hundreds of megabytes; Folio keeps permission to read them.
+     */
+    suspend fun importAudio(uris: List<Uri>): Result<Book> = withContext(Dispatchers.IO) {
+        val id = UUID.randomUUID().toString()
+        runCatching {
+            val ordered = uris.map { it to (displayName(it) ?: it.lastPathSegment.orEmpty()) }
+                .sortedWith { a, b -> naturalCompare(a.second, b.second) }
+            var title: String? = null
+            var author: String? = null
+            var coverName: String? = null
+            val tracks = ArrayList<AudioTrack>()
+            val chapters = ArrayList<AudioChapter>()
+            for ((index, pair) in ordered.withIndex()) {
+                val (uri, name) = pair
+                runCatching {
+                    context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                val retriever = MediaMetadataRetriever()
+                val trackTitle: String
+                val duration: Long
+                try {
+                    retriever.setDataSource(context, uri)
+                    fun meta(key: Int) = retriever.extractMetadata(key)?.trim()?.takeIf { it.isNotEmpty() }
+                    duration = meta(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+                    trackTitle = meta(MediaMetadataRetriever.METADATA_KEY_TITLE) ?: name.substringBeforeLast('.')
+                    if (index == 0) {
+                        title = meta(MediaMetadataRetriever.METADATA_KEY_ALBUM)
+                            ?: if (ordered.size == 1) meta(MediaMetadataRetriever.METADATA_KEY_TITLE) else null
+                        author = meta(MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST)
+                            ?: meta(MediaMetadataRetriever.METADATA_KEY_ARTIST)
+                            ?: meta(MediaMetadataRetriever.METADATA_KEY_AUTHOR)
+                            ?: meta(MediaMetadataRetriever.METADATA_KEY_WRITER)
+                    }
+                    if (coverName == null) retriever.embeddedPicture?.let { coverName = saveCover(it, id) }
+                } catch (e: Exception) {
+                    throw IllegalStateException("“$name” isn't an audio file Folio can play.", e)
+                } finally {
+                    runCatching { retriever.release() }
+                }
+                val marks = runCatching {
+                    context.contentResolver.openFileDescriptor(uri, "r")?.use { fd ->
+                        FileInputStream(fd.fileDescriptor).channel.use { AudioChapters.read(it) }
+                    }
+                }.getOrNull().orEmpty()
+                if (marks.isEmpty()) {
+                    chapters += AudioChapter(trackTitle, index, 0)
+                } else {
+                    // Chapters after the first rarely start at exactly 0; the opening is still a chapter.
+                    if (marks.first().startMs > 1_000) chapters += AudioChapter(trackTitle, index, 0)
+                    marks.forEachIndexed { n, m -> chapters += AudioChapter(m.title.ifBlank { "Chapter ${n + 1}" }, index, m.startMs) }
+                }
+                tracks += AudioTrack(uri.toString(), trackTitle, duration)
+            }
+            val bookTitle = title ?: ordered.first().second.substringBeforeLast('.').ifBlank { "Untitled" }
+            _books.value.firstOrNull { it.isAudio && it.title == bookTitle && it.author == author }?.let { existing ->
+                coverName?.let { File(coversDir, it).delete() }
+                return@runCatching existing
+            }
+            val book = Book(
+                id = id,
+                title = bookTitle,
+                author = author,
+                fileName = "",
+                coverFileName = coverName,
+                addedAt = System.currentTimeMillis(),
+                audio = AudioInfo(tracks, chapters),
+            )
+            mutate { it + book }
+            book
+        }
+    }
+
     suspend fun delete(book: Book) = withContext(Dispatchers.IO) {
         mutate { list -> list.filterNot { it.id == book.id } }
-        bookFile(book).delete()
+        if (book.isAudio) {
+            book.audio?.tracks?.forEach { t ->
+                runCatching { context.contentResolver.releasePersistableUriPermission(Uri.parse(t.uri), Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+            }
+        } else {
+            bookFile(book).delete()
+        }
         coverFile(book)?.delete()
+    }
+
+    /** Saves where the listener is in an audiobook. */
+    suspend fun saveAudioPosition(id: String, track: Int, positionMs: Long, speed: Float) = update(id) { book ->
+        val audio = book.audio ?: return@update book
+        val next = audio.copy(track = track, positionMs = positionMs, speed = speed)
+        book.copy(audio = next, progress = next.progress())
+    }
+
+    /** Fills in track lengths the file metadata didn't give (learned once the player has opened them). */
+    suspend fun setTrackDuration(id: String, track: Int, durationMs: Long) = update(id) { book ->
+        val audio = book.audio ?: return@update book
+        val t = audio.tracks.getOrNull(track) ?: return@update book
+        if (t.durationMs == durationMs) return@update book
+        book.copy(audio = audio.copy(tracks = audio.tracks.toMutableList().also { it[track] = t.copy(durationMs = durationMs) }))
     }
 
     suspend fun markOpened(id: String) = update(id) { it.copy(lastOpenedAt = System.currentTimeMillis()) }
@@ -262,7 +371,7 @@ class LibraryRepository(private val context: Context) {
     suspend fun setScrollMode(id: String, scroll: Boolean) = update(id) { it.copy(scrollMode = scroll) }
 
     suspend fun resetProgress(id: String) =
-        update(id) { it.copy(chapterIndex = 0, chapterOffset = 0f, progress = 0f, lastOpenedAt = 0L) }
+        update(id) { it.copy(chapterIndex = 0, chapterOffset = 0f, progress = 0f, lastOpenedAt = 0L, audio = it.audio?.copy(track = 0, positionMs = 0)) }
 
     private suspend fun update(id: String, transform: (Book) -> Book) = withContext(Dispatchers.IO) {
         mutate { list -> list.map { if (it.id == id) transform(it) else it } }
@@ -288,8 +397,10 @@ class LibraryRepository(private val context: Context) {
         tmp.renameTo(indexFile)
     }
 
-    private fun saveCover(epub: EpubBook, path: String, id: String): String? = runCatching {
-        val bytes = epub.readBytes(path) ?: return null
+    private fun saveCover(epub: EpubBook, path: String, id: String): String? =
+        epub.readBytes(path)?.let { saveCover(it, id) }
+
+    private fun saveCover(bytes: ByteArray, id: String): String? = runCatching {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
         // Downsample to roughly 600px tall; plenty for a grid and keeps scrolling smooth.
@@ -303,6 +414,32 @@ class LibraryRepository(private val context: Context) {
         bitmap.recycle()
         name
     }.getOrNull()
+
+    /** Whether the file at [uri] is audio (by its type, or its name when the type is vague). */
+    fun isAudio(uri: Uri): Boolean {
+        val type = runCatching { context.contentResolver.getType(uri) }.getOrNull().orEmpty()
+        if (type.startsWith("audio/")) return true
+        val name = runCatching {
+            context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                if (c.moveToFirst()) c.getString(0) else null
+            }
+        }.getOrNull() ?: uri.lastPathSegment.orEmpty()
+        return name.substringAfterLast('.', "").lowercase() in AUDIO_EXTENSIONS
+    }
+
+    /** Orders "Part 2" before "Part 10". */
+    private fun naturalCompare(a: String, b: String): Int {
+        val re = Regex("\\d+|\\D+")
+        val x = re.findAll(a.lowercase()).map { it.value }.toList()
+        val y = re.findAll(b.lowercase()).map { it.value }.toList()
+        for (i in 0 until minOf(x.size, y.size)) {
+            val p = x[i]
+            val q = y[i]
+            val c = if (p[0].isDigit() && q[0].isDigit()) (p.toBigInteger()).compareTo(q.toBigInteger()) else p.compareTo(q)
+            if (c != 0) return c
+        }
+        return x.size - y.size
+    }
 
     private fun displayName(uri: Uri): String? = runCatching {
         context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
