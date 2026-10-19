@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Project Gutenberg's certificate chains to SSL.com's 2022 root, which phones older than
+  Android 14 don't have. Trust it (as well as the system's roots) for Gutenberg only.
+-->
+<network-security-config>
+    <domain-config>
+        <domain includeSubdomains="true">gutenberg.org</domain>
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="@raw/sslcom_tls_rsa_root_2022" />
+        </trust-anchors>
+    </domain-config>
+</network-security-config>

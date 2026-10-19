@@ -2,7 +2,6 @@ package com.folio.reader.data
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -24,29 +23,54 @@ data class FreeBook(
 data class FreeBooksPage(val books: List<FreeBook>, val next: String?)
 
 /**
- * Searches Project Gutenberg's 70,000-odd public-domain books (through the Gutendex
- * catalogue API) and downloads their EPUBs.
+ * Searches Project Gutenberg's 70,000-odd public-domain books through its own OPDS
+ * catalogue feed, and downloads their EPUBs.
  */
 object FreeBooks {
-    private const val API = "https://gutendex.com/books"
+    private const val SITE = "https://www.gutenberg.org"
 
-    /** Popular books, or those matching [query] (title or author) and [topic] (subject or shelf). */
+    /** Popular books, or those matching [query] (title or author) and [topic] (a subject keyword). */
     suspend fun search(query: String, topic: String?): FreeBooksPage {
-        val params = buildList {
-            add("languages=en")
-            if (query.isNotBlank()) add("search=" + URLEncoder.encode(query.trim(), "UTF-8"))
-            if (!topic.isNullOrBlank()) add("topic=" + URLEncoder.encode(topic, "UTF-8"))
-        }
-        return page("$API/?" + params.joinToString("&"))
+        val words = listOfNotNull(query.trim().takeIf { it.isNotEmpty() }, topic?.takeIf { it.isNotBlank() }).joinToString(" ")
+        val url = if (words.isEmpty()) "$SITE/ebooks/search.opds/?sort_order=downloads"
+        else "$SITE/ebooks/search.opds/?query=" + URLEncoder.encode(words, "UTF-8") +
+            if (query.isBlank()) "&sort_order=downloads" else ""
+        return page(url)
     }
 
     /** The page after one already shown ([FreeBooksPage.next]). */
     suspend fun page(url: String): FreeBooksPage = withContext(Dispatchers.IO) {
-        val o = JSONObject(get(url).bufferedReader().use { it.readText() })
-        val results = o.optJSONArray("results")
-        val books = (0 until (results?.length() ?: 0)).mapNotNull { i -> parse(results!!.getJSONObject(i)) }
-        FreeBooksPage(books, o.optString("next").takeIf { !o.isNull("next") && it.startsWith("https://") })
+        parseFeed(get(url).bufferedReader().use { it.readText() })
     }
+
+    internal fun parseFeed(xml: String): FreeBooksPage {
+        val books = xml.split("<entry>").drop(1).mapNotNull { e ->
+            val id = Regex("<id>[^<]*/ebooks/(\\d+)\\.opds</id>").find(e)?.groupValues?.get(1)?.toIntOrNull() ?: return@mapNotNull null
+            val title = Regex("<title>([^<]*)</title>").find(e)?.groupValues?.get(1)?.let(::unescape) ?: return@mapNotNull null
+            val author = Regex("<content[^>]*>([^<]*)</content>").find(e)?.groupValues?.get(1)?.let(::unescape)
+                ?.trim()?.takeIf { it.isNotEmpty() }
+            FreeBook(
+                id = id,
+                title = cleanTitle(title),
+                author = author,
+                coverUrl = "$SITE/cache/epub/$id/pg$id.cover.medium.jpg",
+                epubUrl = "$SITE/ebooks/$id.epub3.images",
+                downloads = 0,
+                summary = null,
+            )
+        }
+        val next = Regex("<link[^>]*rel=\"next\"[^>]*>").find(xml)?.value
+            ?.let { Regex("href=\"([^\"]*)\"").find(it)?.groupValues?.get(1) }
+            ?.let(::unescape)
+            ?.let { if (it.startsWith("/")) SITE + it else it }
+            ?.takeIf { it.startsWith("https://") }
+        return FreeBooksPage(books.distinctBy { it.id }, next)
+    }
+
+    private fun unescape(s: String): String = s
+        .replace(Regex("&#(\\d+);")) { it.groupValues[1].toInt().toChar().toString() }
+        .replace(Regex("&#x([0-9a-fA-F]+);")) { it.groupValues[1].toInt(16).toChar().toString() }
+        .replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&")
 
     /** Downloads [book]'s EPUB into [dir]. */
     suspend fun download(book: FreeBook, dir: File): File = withContext(Dispatchers.IO) {
@@ -82,32 +106,6 @@ object FreeBooks {
             }
         }
         throw IOException("Too many redirects")
-    }
-
-    private fun parse(o: JSONObject): FreeBook? {
-        val formats = o.optJSONObject("formats") ?: return null
-        val epub = formats.optString("application/epub+zip").takeIf { it.isNotBlank() } ?: return null
-        val authors = o.optJSONArray("authors")
-        val author = authors?.optJSONObject(0)?.optString("name")?.takeIf { it.isNotBlank() }?.let(::displayName)
-        return FreeBook(
-            id = o.optInt("id"),
-            title = cleanTitle(o.optString("title")),
-            author = author?.let { if ((authors?.length() ?: 0) > 1) "$it and others" else it },
-            coverUrl = formats.optString("image/jpeg").takeIf { it.isNotBlank() },
-            epubUrl = epub,
-            downloads = o.optInt("download_count"),
-            summary = o.optJSONArray("summaries")?.optString(0)?.takeIf { it.isNotBlank() }
-                ?.removeSuffix("(This is an automatically generated summary.)")?.trim(),
-        )
-    }
-
-    /** "Dostoyevsky, Fyodor" → "Fyodor Dostoyevsky"; keeps names with more than one comma as they are. */
-    internal fun displayName(name: String): String {
-        val parts = name.split(", ")
-        if (parts.size != 2) return name
-        // Drop any bracketed full name: "Carroll, Lewis (Lewis Carroll)".
-        val first = parts[1].substringBefore(" (").trim()
-        return "$first ${parts[0].trim()}"
     }
 
     /** Gutenberg titles carry subtitles after a colon or semicolon, sometimes over several lines. */

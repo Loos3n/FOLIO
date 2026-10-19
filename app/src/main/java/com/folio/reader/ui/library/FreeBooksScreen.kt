@@ -77,7 +77,7 @@ private val TOPICS = listOf(
     "adventure" to "Adventure",
     "detective" to "Mystery",
     "science fiction" to "Science fiction",
-    "love stories" to "Romance",
+    "love" to "Romance",
     "horror" to "Horror",
     "children" to "Children's",
     "humor" to "Humour",
