@@ -61,6 +61,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -101,12 +102,13 @@ import kotlin.math.roundToInt
 
 /** EPUBs, and audio files for audiobooks (M4B files often come through as octet-stream). */
 private val BOOK_TYPES = arrayOf("application/epub+zip", "application/octet-stream", "audio/*")
-private val CoverShape = RoundedCornerShape(topStart = 4.dp, bottomStart = 4.dp, topEnd = 10.dp, bottomEnd = 10.dp)
+internal val CoverShape = RoundedCornerShape(topStart = 4.dp, bottomStart = 4.dp, topEnd = 10.dp, bottomEnd = 10.dp)
 
 @Composable
 fun LibraryScreen(
     vm: LibraryViewModel,
     onOpen: (String) -> Unit,
+    onFindFree: () -> Unit,
 ) {
     val allBooks by vm.allBooks.collectAsStateWithLifecycle()
     val books by vm.books.collectAsStateWithLifecycle()
@@ -183,7 +185,7 @@ fun LibraryScreen(
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
         if (allBooks.isEmpty()) {
-            EmptyLibrary(importing = importing, onAdd = pickBooks, onRestore = restore, modifier = Modifier.padding(padding))
+            EmptyLibrary(importing = importing, onAdd = pickBooks, onFindFree = onFindFree, onRestore = restore, modifier = Modifier.padding(padding))
             return@Scaffold
         }
         Box(Modifier.fillMaxSize().padding(padding)) {
@@ -207,6 +209,7 @@ fun LibraryScreen(
                         sort = sort,
                         onSort = vm::setSort,
                         onStats = { showStats = true },
+                        onFindFree = onFindFree,
                         onBackUp = backUp,
                         onRestore = restore,
                     )
@@ -250,6 +253,21 @@ fun LibraryScreen(
                         onCollections = { editingCollections = book },
                         modifier = Modifier.animateItem(),
                     )
+                }
+                if (query.isBlank()) {
+                    item(span = { GridItemSpan(maxLineSpan) }, key = "free") {
+                        Column(
+                            Modifier.fillMaxWidth().padding(top = 8.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            Text(
+                                "Looking for something new?",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            TextButton(onClick = onFindFree) { Text("Find free books") }
+                        }
+                    }
                 }
             }
             // Keeps scrolled content from running under the status bar icons.
@@ -317,6 +335,7 @@ private fun Header(
     sort: SortOrder,
     onSort: (SortOrder) -> Unit,
     onStats: () -> Unit,
+    onFindFree: () -> Unit,
     onBackUp: () -> Unit,
     onRestore: () -> Unit,
 ) {
@@ -364,6 +383,13 @@ private fun Header(
                 }
                 DropdownMenu(expanded = moreOpen, onDismissRequest = { moreOpen = false }) {
                     DropdownMenuItem(
+                        text = { Text("Find free books") },
+                        onClick = {
+                            moreOpen = false
+                            onFindFree()
+                        },
+                    )
+                    DropdownMenuItem(
                         text = { Text("Back up library") },
                         enabled = !importing,
                         onClick = {
@@ -394,7 +420,7 @@ private fun Header(
 }
 
 @Composable
-private fun SearchField(query: String, onQuery: (String) -> Unit) {
+internal fun SearchField(query: String, onQuery: (String) -> Unit, placeholder: String = "Search titles and authors") {
     Surface(
         shape = CircleShape,
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -417,7 +443,7 @@ private fun SearchField(query: String, onQuery: (String) -> Unit) {
             ) {
                 if (query.isEmpty()) {
                     Text(
-                        "Search titles and authors",
+                        placeholder,
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -755,7 +781,7 @@ private fun Badge(text: String, modifier: Modifier = Modifier, icon: Boolean = f
 }
 
 @Composable
-private fun EmptyLibrary(importing: Boolean, onAdd: () -> Unit, onRestore: () -> Unit, modifier: Modifier = Modifier) {
+private fun EmptyLibrary(importing: Boolean, onAdd: () -> Unit, onFindFree: () -> Unit, onRestore: () -> Unit, modifier: Modifier = Modifier) {
     Column(
         modifier
             .fillMaxSize()
@@ -806,6 +832,10 @@ private fun EmptyLibrary(importing: Boolean, onAdd: () -> Unit, onRestore: () ->
             Icon(Icons.Filled.Add, contentDescription = null)
             Spacer(Modifier.width(8.dp))
             Text(if (importing) "Adding…" else "Add books")
+        }
+        Spacer(Modifier.height(12.dp))
+        OutlinedButton(onClick = onFindFree, contentPadding = PaddingValues(horizontal = 24.dp, vertical = 14.dp)) {
+            Text("Find free books")
         }
         Spacer(Modifier.height(8.dp))
         TextButton(onClick = onRestore, enabled = !importing) { Text("Restore from a backup") }

@@ -398,7 +398,9 @@ class LibraryRepository(private val context: Context) {
             scrollMode = mine.scrollMode ?: theirs.scrollMode,
             audio = mine.audio?.let { a ->
                 val t = theirs.audio
-                if (newer && t != null && t.track < a.tracks.size) a.copy(track = t.track, positionMs = t.positionMs, speed = t.speed) else a
+                val placed = if (newer && t != null && t.track < a.tracks.size) a.copy(track = t.track, positionMs = t.positionMs, speed = t.speed) else a
+                val marks = (a.bookmarks + t?.bookmarks.orEmpty().filter { b -> a.bookmarks.none { it.id == b.id } }).sortedBy { it.positionMs }
+                placed.copy(bookmarks = marks)
             },
         )
     }
@@ -420,6 +422,18 @@ class LibraryRepository(private val context: Context) {
         val audio = book.audio ?: return@update book
         val next = audio.copy(track = track, positionMs = positionMs, speed = speed)
         book.copy(audio = next, progress = next.progress())
+    }
+
+    /** Adds [bookmark] to an audiobook, or replaces the one with the same id (e.g. after editing its note). */
+    suspend fun saveAudioBookmark(id: String, bookmark: AudioBookmark) = update(id) { book ->
+        val audio = book.audio ?: return@update book
+        val list = (audio.bookmarks.filterNot { it.id == bookmark.id } + bookmark).sortedBy { it.positionMs }
+        book.copy(audio = audio.copy(bookmarks = list))
+    }
+
+    suspend fun removeAudioBookmark(id: String, bookmarkId: String) = update(id) { book ->
+        val audio = book.audio ?: return@update book
+        book.copy(audio = audio.copy(bookmarks = audio.bookmarks.filterNot { it.id == bookmarkId }))
     }
 
     /** Fills in track lengths the file metadata didn't give (learned once the player has opened them). */

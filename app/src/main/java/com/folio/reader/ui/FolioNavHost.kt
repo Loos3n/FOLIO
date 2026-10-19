@@ -18,6 +18,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.folio.reader.FolioApp
+import com.folio.reader.ui.library.FreeBooksScreen
+import com.folio.reader.ui.library.FreeBooksViewModel
 import com.folio.reader.ui.library.LibraryScreen
 import com.folio.reader.ui.library.LibraryViewModel
 import com.folio.reader.ui.listen.ListenScreen
@@ -68,7 +70,16 @@ fun FolioNavHost(incoming: MutableStateFlow<Uri?>, openBook: MutableStateFlow<St
             LibraryScreen(
                 vm = libraryVm,
                 onOpen = open,
+                onFindFree = { nav.navigate("free") { launchSingleTop = true } },
             )
+        }
+        composable("free") {
+            val freeVm: FreeBooksViewModel = viewModel(
+                factory = viewModelFactory {
+                    initializer { FreeBooksViewModel(this[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY] as FolioApp) }
+                },
+            )
+            FreeBooksScreen(vm = freeVm, onBack = { nav.popBackStack() }, onOpen = open)
         }
         composable(
             "reader/{bookId}",

@@ -21,6 +21,29 @@ data class AudioChapter(val title: String, val track: Int, val startMs: Long) {
     }
 }
 
+/** A saved moment in an audiobook, with an optional note. */
+data class AudioBookmark(
+    val id: String,
+    /** From the start of the book. */
+    val positionMs: Long,
+    val chapterTitle: String,
+    val note: String,
+    val createdAt: Long,
+) {
+    fun toJson(): JSONObject = JSONObject()
+        .put("id", id).put("positionMs", positionMs).put("chapterTitle", chapterTitle).put("note", note).put("createdAt", createdAt)
+
+    companion object {
+        fun fromJson(o: JSONObject) = AudioBookmark(
+            id = o.optString("id"),
+            positionMs = o.optLong("positionMs"),
+            chapterTitle = o.optString("chapterTitle"),
+            note = o.optString("note"),
+            createdAt = o.optLong("createdAt"),
+        )
+    }
+}
+
 /** What makes a library book an audiobook, and where the listener is in it. */
 data class AudioInfo(
     val tracks: List<AudioTrack>,
@@ -29,6 +52,8 @@ data class AudioInfo(
     val track: Int = 0,
     val positionMs: Long = 0,
     val speed: Float = 1f,
+    /** In listening order. */
+    val bookmarks: List<AudioBookmark> = emptyList(),
 ) {
     val totalMs: Long get() = tracks.sumOf { it.durationMs }
 
@@ -70,6 +95,7 @@ data class AudioInfo(
         .put("track", track)
         .put("positionMs", positionMs)
         .put("speed", speed.toDouble())
+        .put("bookmarks", JSONArray().apply { bookmarks.forEach { put(it.toJson()) } })
 
     companion object {
         fun fromJson(o: JSONObject) = AudioInfo(
@@ -78,6 +104,7 @@ data class AudioInfo(
             track = o.optInt("track"),
             positionMs = o.optLong("positionMs"),
             speed = o.optDouble("speed", 1.0).toFloat(),
+            bookmarks = o.optJSONArray("bookmarks")?.let { a -> List(a.length()) { AudioBookmark.fromJson(a.getJSONObject(it)) } }.orEmpty(),
         )
     }
 }

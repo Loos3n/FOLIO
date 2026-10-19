@@ -562,10 +562,63 @@ object ReaderContent {
             axis = null;
           });
 
+          // ---- Footnotes: show the note in a pop-up instead of jumping to it.
+          var INLINE = /^(a|span|sup|sub|em|i|b|strong|small|cite|abbr)$/;
+          function typeOf(el) {
+            return el && el.getAttribute ? ((el.getAttribute('epub:type') || '') + ' ' + (el.getAttribute('role') || '')).toLowerCase() : '';
+          }
+          function looksLikeNoteRef(a, target) {
+            if (/noteref/.test(typeOf(a))) return true;
+            if (/footnote|endnote|rearnote|doc-note|\bnote\b/.test(typeOf(target))) return true;
+            var txt = a.textContent.replace(/\s+/g, '');
+            if (!txt || txt.length > 6) return false;
+            if (a.closest('sup') || a.querySelector('sup')) return true;
+            return /^[\[\(]?(\d{1,3}|[*\u2020\u2021\u00a7\u00b6]+|[a-z]|[ivx]{1,5})[\]\)]?$/i.test(txt);
+          }
+          function noteText(el) {
+            // A note's target is often an empty anchor at its start: take the block around it.
+            var n = el;
+            while (n && n.parentNode && n.nodeName && INLINE.test(n.nodeName.toLowerCase()) &&
+                   n.parentNode.nodeName.toLowerCase() !== 'body') n = n.parentNode;
+            var text = (n.textContent || '').replace(/\s+/g, ' ').trim();
+            return text.length > 3000 ? text.slice(0, 3000) + '\u2026' : text;
+          }
+          function findIn(doc, id) {
+            return id ? (doc.getElementById(id) || doc.getElementsByName(id)[0] || null) : null;
+          }
+          function openFootnote(a, e) {
+            if (!bridge || !bridge.onFootnote) return false;
+            var url;
+            try { url = new URL(a.href); } catch (err) { return false; }
+            if (url.host !== location.host || !url.hash) return false;
+            var id = decodeURIComponent(url.hash.slice(1));
+            if (url.pathname === location.pathname) {
+              var target = findIn(document, id);
+              if (!target || !looksLikeNoteRef(a, target)) return false;
+              var text = noteText(target);
+              if (!text) return false;
+              e.preventDefault();
+              bridge.onFootnote(text, a.href);
+              return true;
+            }
+            // In another file of the book: only for links that look like note markers.
+            if (!looksLikeNoteRef(a, null)) return false;
+            e.preventDefault();
+            fetch(url.origin + url.pathname).then(function (r) { return r.text(); }).then(function (html) {
+              var doc = new DOMParser().parseFromString(html, 'text/html');
+              var target = findIn(doc, id), text = target && noteText(target);
+              if (text) bridge.onFootnote(text, a.href); else location.href = a.href;
+            }).catch(function () { location.href = a.href; });
+            return true;
+          }
+
           document.addEventListener('click', function (e) {
             if (moved) { moved = false; return; }
             for (var t = e.target; t && t !== document; t = t.parentNode) {
-              if (t.tagName && t.tagName.toLowerCase() === 'a' && t.getAttribute('href')) return;
+              if (t.tagName && t.tagName.toLowerCase() === 'a' && t.getAttribute('href')) {
+                openFootnote(t, e);
+                return;
+              }
             }
             if (hasSelection()) return;
             if (found) { found = null; paint('folio-find', []); }
@@ -971,6 +1024,8 @@ class ReaderBridge(
     private val manualTurn: () -> Unit = {},
     /** The reader tapped one of their highlights. */
     private val highlightTapped: (id: String) -> Unit = {},
+    /** The reader tapped a footnote marker: the note's text, and the link to it. */
+    private val footnoteTapped: (text: String, href: String) -> Unit = { _, _ -> },
 ) {
     @JavascriptInterface fun onPage(page: Int, count: Int, offset: Float, section: Int, sectionEnd: Int, charsLeft: Int, charAt: Int) =
         pageChanged(PageInfo(page, count, offset, section, sectionEnd, charsLeft, charAt))
@@ -981,6 +1036,7 @@ class ReaderBridge(
     @JavascriptInterface fun prevChapter(): Boolean = prevRequested()
     @JavascriptInterface fun onManualTurn() = manualTurn()
     @JavascriptInterface fun onHighlightTap(id: String) = highlightTapped(id)
+    @JavascriptInterface fun onFootnote(text: String, href: String) = footnoteTapped(text, href)
 }
 
 /** Where the reader is in a chapter, as the page script reports it. */

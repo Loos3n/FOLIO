@@ -43,6 +43,8 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
@@ -91,6 +93,7 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -237,6 +240,8 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
     var sleepEndsAt by remember { mutableStateOf<Long?>(null) }
     var sleepAtChapterEnd by remember { mutableStateOf(false) }
     var showReadAloudSheet by remember { mutableStateOf(false) }
+    /** A footnote being shown: its text and the link to where it lives in the book. */
+    var footnote by remember { mutableStateOf<Pair<String, String>?>(null) }
     /** Read-aloud bookkeeping that must work with the screen off, outside Compose state. */
     val speechFlags = remember { SpeechFlags() }
     val readAloud = remember {
@@ -480,6 +485,7 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
                             editingNote = false
                         }
                     },
+                    onFootnote = { text, href -> footnote = text to href },
                     onCreated = { webView = it },
                     onChapterReady = { speechFlags.onChapterReady() },
                     modifier = Modifier
@@ -730,6 +736,17 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
                 onDismiss = { editing = null },
             )
         }
+        footnote?.let { (text, href) ->
+            FootnoteSheet(
+                text = text,
+                onGoTo = {
+                    footnote = null
+                    val uri = Uri.parse(href)
+                    ReaderContent.pathFor(uri)?.let { path -> vm.openLink(path, uri.fragment) }
+                },
+                onDismiss = { footnote = null },
+            )
+        }
         if (showReadAloudSheet) {
             ReadAloudSheet(
                 voices = remember { readAloud.voices() },
@@ -809,6 +826,7 @@ private fun BookWebView(
     onManualTurn: () -> Unit,
     onSelection: (action: Int, json: String) -> Unit,
     onHighlightTap: (id: String) -> Unit,
+    onFootnote: (text: String, href: String) -> Unit,
     onCreated: (FolioWebView?) -> Unit,
     onChapterReady: () -> Unit,
     modifier: Modifier = Modifier,
@@ -818,6 +836,7 @@ private fun BookWebView(
     val currentOnManualTurn = rememberUpdatedState(onManualTurn)
     val currentOnSelection = rememberUpdatedState(onSelection)
     val currentOnHighlightTap = rememberUpdatedState(onHighlightTap)
+    val currentOnFootnote = rememberUpdatedState(onFootnote)
     val css = remember(prefs, theme, scroll) { ReaderContent.css(prefs, theme, scroll) }
     val currentCss = rememberUpdatedState(css)
     val currentOnTap = rememberUpdatedState(onTap)
@@ -859,6 +878,7 @@ private fun BookWebView(
                     prevRequested = { vm.hasPrevChapter().also { if (it) view.post { vm.prevChapter() } } },
                     manualTurn = { view.post { currentOnManualTurn.value() } },
                     highlightTapped = { id -> view.post { currentOnHighlightTap.value(id) } },
+                    footnoteTapped = { text, href -> view.post { currentOnFootnote.value(text, href) } },
                 ),
                 "FolioBridge",
             )
@@ -1637,4 +1657,33 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this
     is ContextWrapper -> baseContext.findActivity()
     else -> null
+}
+
+/** A footnote, shown over the page so the reader doesn't lose their place. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FootnoteSheet(text: String, onGoTo: () -> Unit, onDismiss: () -> Unit) {
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(max = 420.dp)
+                .padding(start = 24.dp, end = 24.dp, bottom = 24.dp),
+        ) {
+            Text(
+                "Note",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Spacer(Modifier.height(8.dp))
+            SelectionContainer(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
+                Text(text, style = MaterialTheme.typography.bodyLarge)
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = onGoTo) { Text("Go to note") }
+                TextButton(onClick = onDismiss) { Text("Close") }
+            }
+        }
+    }
 }

@@ -91,7 +91,7 @@ fun BookCover(title: String, author: String?, file: File?, modifier: Modifier = 
 
 /** A designed stand-in for books that ship without cover art. */
 @Composable
-private fun GeneratedCover(title: String, author: String?, modifier: Modifier) {
+internal fun GeneratedCover(title: String, author: String?, modifier: Modifier) {
     val (base, accent) = placeholderPalettes[title.hashCode().absoluteValue % placeholderPalettes.size]
     val display = MaterialTheme.typography.headlineSmall.fontFamily
     Box(modifier.background(base)) {

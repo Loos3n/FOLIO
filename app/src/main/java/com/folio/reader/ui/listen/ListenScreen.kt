@@ -1,5 +1,21 @@
 package com.folio.reader.ui.listen
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.rememberCoroutineScope
+import com.folio.reader.data.AudioBookmark
+import kotlinx.coroutines.launch
+import java.util.UUID
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -105,6 +121,30 @@ fun ListenScreen(bookId: String, onBack: () -> Unit) {
     }
 
     var showChapters by remember { mutableStateOf(false) }
+    /** Which tab the chapters sheet opens on: 0 chapters, 1 bookmarks. */
+    var sheetTab by remember { mutableIntStateOf(0) }
+    /** The bookmark just added, offered for a note for a few seconds. */
+    var justMarked by remember { mutableStateOf<AudioBookmark?>(null) }
+    var editingMark by remember { mutableStateOf<AudioBookmark?>(null) }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(justMarked) {
+        if (justMarked != null) {
+            delay(5_000)
+            justMarked = null
+        }
+    }
+    fun addBookmark() {
+        val pos = state.positionMs
+        val mark = AudioBookmark(
+            id = UUID.randomUUID().toString(),
+            positionMs = pos,
+            chapterTitle = audio.chapters.getOrNull(audio.chapterAt(audio.locate(pos).first, audio.locate(pos).second))?.title.orEmpty(),
+            note = "",
+            createdAt = System.currentTimeMillis(),
+        )
+        scope.launch { app.library.saveAudioBookmark(book.id, mark) }
+        justMarked = mark
+    }
     var showSpeed by remember { mutableStateOf(false) }
     var showSleep by remember { mutableStateOf(false) }
 
@@ -152,8 +192,8 @@ fun ListenScreen(bookId: String, onBack: () -> Unit) {
                     textAlign = TextAlign.Center,
                     modifier = Modifier.weight(1f),
                 )
-                IconButton(onClick = { showChapters = true }) {
-                    Icon(Icons.AutoMirrored.Filled.List, contentDescription = "Chapters")
+                IconButton(onClick = { sheetTab = 0; showChapters = true }) {
+                    Icon(Icons.AutoMirrored.Filled.List, contentDescription = "Chapters and bookmarks")
                 }
             }
             Spacer(Modifier.height(12.dp))
@@ -187,7 +227,7 @@ fun ListenScreen(bookId: String, onBack: () -> Unit) {
             }
             Spacer(Modifier.height(18.dp))
             Surface(
-                onClick = { showChapters = true },
+                onClick = { sheetTab = 0; showChapters = true },
                 shape = CircleShape,
                 color = scheme.secondaryContainer,
                 contentColor = scheme.onSecondaryContainer,
@@ -264,13 +304,19 @@ fun ListenScreen(bookId: String, onBack: () -> Unit) {
             }
 
             Spacer(Modifier.height(20.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                FilledTonalButton(onClick = { showSpeed = true }, modifier = Modifier.weight(1f)) {
-                    Text(speedLabel(state.speed), fontWeight = FontWeight.SemiBold)
+            val compact = PaddingValues(horizontal = 10.dp, vertical = 10.dp)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilledTonalButton(onClick = { showSpeed = true }, modifier = Modifier.weight(1f), contentPadding = compact) {
+                    Text(speedLabel(state.speed), fontWeight = FontWeight.SemiBold, maxLines = 1)
                     Spacer(Modifier.width(6.dp))
                     Text("Speed", maxLines = 1)
                 }
-                FilledTonalButton(onClick = { showSleep = true }, modifier = Modifier.weight(1f)) {
+                FilledTonalButton(onClick = { addBookmark() }, modifier = Modifier.weight(1f), contentPadding = compact) {
+                    Icon(ListenIcons.BookmarkAdd, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Bookmark", maxLines = 1)
+                }
+                FilledTonalButton(onClick = { showSleep = true }, modifier = Modifier.weight(1f), contentPadding = compact) {
                     Icon(ListenIcons.Bedtime, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
                     val ends = state.sleepEndsAt
@@ -282,6 +328,19 @@ fun ListenScreen(bookId: String, onBack: () -> Unit) {
                         },
                         maxLines = 1,
                     )
+                }
+            }
+            AnimatedVisibility(justMarked != null) {
+                val mark = justMarked
+                Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "Bookmarked at ${clock(mark?.positionMs ?: 0)}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = scheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = { editingMark = mark; justMarked = null }) { Text("Add note") }
+                    TextButton(onClick = { justMarked = null; sheetTab = 1; showChapters = true }) { Text("View all") }
                 }
             }
             if (state.error != null && loaded) {
@@ -296,7 +355,30 @@ fun ListenScreen(bookId: String, onBack: () -> Unit) {
 
     if (showChapters) {
         ModalBottomSheet(onDismissRequest = { showChapters = false }, sheetState = rememberModalBottomSheetState()) {
-            Text("Chapters", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(start = 24.dp, bottom = 8.dp))
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 12.dp)) {
+                listOf("Chapters", "Bookmarks").forEachIndexed { i, label ->
+                    SegmentedButton(
+                        selected = sheetTab == i,
+                        onClick = { sheetTab = i },
+                        shape = SegmentedButtonDefaults.itemShape(i, 2),
+                        icon = {},
+                    ) { Text(label) }
+                }
+            }
+            if (sheetTab == 1) {
+                AudioBookmarkList(
+                    marks = audio.bookmarks,
+                    onOpen = { m ->
+                        ensureLoaded()
+                        player.seekTo(m.positionMs)
+                        showChapters = false
+                    },
+                    onEdit = { editingMark = it },
+                    onDelete = { m -> scope.launch { app.library.removeAudioBookmark(book.id, m.id) } },
+                )
+                Spacer(Modifier.height(24.dp))
+                return@ModalBottomSheet
+            }
             val list = rememberLazyListState(initialFirstVisibleItemIndex = (state.chapter - 2).coerceAtLeast(0))
             LazyColumn(state = list, modifier = Modifier.padding(horizontal = 12.dp)) {
                 itemsIndexed(audio.chapters) { i, c ->
@@ -326,6 +408,29 @@ fun ListenScreen(bookId: String, onBack: () -> Unit) {
             }
             Spacer(Modifier.height(24.dp))
         }
+    }
+    editingMark?.let { mark ->
+        var note by remember(mark.id) { mutableStateOf(mark.note) }
+        AlertDialog(
+            onDismissRequest = { editingMark = null },
+            title = { Text("Note at ${clock(mark.positionMs)}") },
+            text = {
+                OutlinedTextField(
+                    value = note,
+                    onValueChange = { note = it },
+                    placeholder = { Text("What happens here?") },
+                    minLines = 2,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch { app.library.saveAudioBookmark(book.id, mark.copy(note = note.trim())) }
+                    editingMark = null
+                }) { Text("Save") }
+            },
+            dismissButton = { TextButton(onClick = { editingMark = null }) { Text("Cancel") } },
+        )
     }
     if (showSpeed) {
         ModalBottomSheet(onDismissRequest = { showSpeed = false }) {
@@ -364,6 +469,49 @@ fun ListenScreen(bookId: String, onBack: () -> Unit) {
                     ensureLoaded()
                     player.setSleep(minutes[i], chapterEnd = i == 5)
                     showSleep = false
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AudioBookmarkList(
+    marks: List<AudioBookmark>,
+    onOpen: (AudioBookmark) -> Unit,
+    onEdit: (AudioBookmark) -> Unit,
+    onDelete: (AudioBookmark) -> Unit,
+) {
+    val scheme = MaterialTheme.colorScheme
+    if (marks.isEmpty()) {
+        Text(
+            "No bookmarks yet. Tap Bookmark while listening to save a moment you want to come back to.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = scheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp),
+        )
+        return
+    }
+    LazyColumn(Modifier.padding(horizontal = 12.dp)) {
+        items(marks, key = { it.id }) { m ->
+            Surface(
+                onClick = { onOpen(m) },
+                shape = RoundedCornerShape(16.dp),
+                color = Color.Transparent,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(Modifier.padding(start = 16.dp, top = 10.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(clock(m.positionMs), style = MaterialTheme.typography.titleSmall, color = scheme.primary)
+                        if (m.chapterTitle.isNotBlank()) {
+                            Text(m.chapterTitle, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        if (m.note.isNotBlank()) {
+                            Text(m.note, style = MaterialTheme.typography.bodyMedium, color = scheme.onSurfaceVariant)
+                        }
+                    }
+                    IconButton(onClick = { onEdit(m) }) { Icon(Icons.Filled.Edit, contentDescription = "Edit note") }
+                    IconButton(onClick = { onDelete(m) }) { Icon(Icons.Filled.Delete, contentDescription = "Delete bookmark") }
                 }
             }
         }
@@ -441,6 +589,10 @@ internal object ListenIcons {
     val Replay = icon(
         "Replay",
         "M12,5V1L7,6l5,5V7c3.31,0 6,2.69 6,6s-2.69,6 -6,6 -6,-2.69 -6,-6H4c0,4.42 3.58,8 8,8s8,-3.58 8,-8 -3.58,-8 -8,-8z",
+    )
+    val BookmarkAdd = icon(
+        "BookmarkAdd",
+        "M17,11v6.97l-5,-2.14l-5,2.14V5h6V3H7C5.9,3 5,3.9 5,5v16l7,-3l7,3V11H17zM21,7h-2v2h-2V7h-2V5h2V3h2v2h2V7z",
     )
     val Bedtime = icon(
         "Bedtime",

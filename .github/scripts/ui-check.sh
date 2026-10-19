@@ -288,6 +288,15 @@ tap_label "Sleep"
 tap_label "End of chapter"
 sleep 2
 adb exec-out screencap -p > "$OUT/34-speed-sleep.png"
+tap_label "Bookmark"
+adb exec-out screencap -p > "$OUT/34b-bookmarked.png"
+tap_label "Add note"
+adb shell input text "The%sbig%sreveal"; sleep 1
+tap_label "Save"
+tap_label "Chapters and bookmarks"
+tap_label "Bookmarks"
+adb exec-out screencap -p > "$OUT/34c-audio-bookmarks.png"
+adb shell input keyevent KEYCODE_BACK; sleep 2
 adb shell cmd statusbar expand-notifications; sleep 3
 adb exec-out screencap -p > "$OUT/35-notification.png"
 adb shell cmd statusbar collapse; sleep 1
@@ -355,6 +364,29 @@ adb logcat -d -s FolioBackup > "$OUT/54-backup-log.txt" || true
 adb shell am start -W -n $PKG/.MainActivity --es open_book test
 sleep 8
 adb exec-out screencap -p > "$OUT/55-restored-book.png"
+
+# Free books: browse Project Gutenberg, search, and add one to the library.
+adb shell am force-stop $PKG; sleep 1
+adb shell am start -W -n $PKG/.MainActivity
+sleep 4
+tap_label "More options"
+tap_label "Find free books"
+sleep 10
+adb exec-out screencap -p > "$OUT/60-free-books.png"
+tap_label "Science fiction"
+sleep 10
+adb exec-out screencap -p > "$OUT/61-free-scifi.png"
+adb shell input tap $((W / 2)) $((H * 22 / 100)); sleep 1
+adb shell input text "pride%sand%sprejudice"; sleep 1
+adb shell input keyevent KEYCODE_BACK; sleep 10
+adb exec-out screencap -p > "$OUT/62-free-search.png"
+tap_label "Add to library"
+sleep 25
+adb exec-out screencap -p > "$OUT/63-free-added.png"
+tap_label "In your library · Read"
+sleep 8
+adb exec-out screencap -p > "$OUT/64-free-opened.png"
+adb shell run-as $PKG cat files/library.json > "$OUT/library-free.json" || true
 
 adb shell dumpsys package com.svox.pico > /dev/null 2>&1 && echo "pico present" >> "$OUT/tts.txt"
 adb shell settings get secure tts_default_synth >> "$OUT/tts.txt" 2>&1 || true
