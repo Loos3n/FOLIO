@@ -1,9 +1,19 @@
 name: UI check
 on:
   push:
+    paths:
+      - "app/**"
+      - "gradle/**"
+      - "*.gradle.kts"
+      - ".github/scripts/ui-check.sh"
+      - ".github/workflows/ui-check.yml"
   workflow_dispatch:
 permissions:
   contents: write
+# A newer push makes an older check pointless: stop it rather than queue behind it.
+concurrency:
+  group: ui-check-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   emulator:
     runs-on: ubuntu-latest
@@ -15,6 +25,9 @@ jobs:
           distribution: temurin
           java-version: 17
       - uses: gradle/actions/setup-gradle@v4
+        with:
+          # Off the default branch the Gradle cache is read-only unless told otherwise.
+          cache-read-only: false
       - run: ./gradlew assembleDebug
       - name: Free disk space for the emulator
         run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /opt/hostedtoolcache/CodeQL /usr/local/lib/node_modules || true
@@ -23,6 +36,30 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
+      # Booting from a saved snapshot takes seconds instead of minutes. The snapshot is made
+      # once (with the text-to-speech engine already installed) and cached.
+      - name: Restore the emulator snapshot
+        uses: actions/cache@v4
+        id: avd-cache
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          key: avd-31-pixel_6-espeak-v1
+      - name: Make the emulator snapshot
+        if: steps.avd-cache.outputs.cache-hit != 'true'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 31
+          target: default
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: false
+          disk-size: 2048M
+          emulator-boot-timeout: 900
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: bash .github/scripts/emulator-setup.sh
       - name: Run app on emulator and take screenshots
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -33,7 +70,8 @@ jobs:
           disable-animations: false
           disk-size: 2048M
           emulator-boot-timeout: 900
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot -camera-back none
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot-save -camera-back none
           script: bash .github/scripts/ui-check.sh
       # Screenshots go to the "ui-check-shots" branch (Actions artifacts are over quota,
       # and creating releases from this job has been refused with HTTP 403).

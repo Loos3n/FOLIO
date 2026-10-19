@@ -8,18 +8,9 @@ mkdir -p "$OUT"
 
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 
-# The emulator image has no text-to-speech engine; add eSpeak NG (from F-Droid) so
-# read-aloud can be exercised.
-ESPEAK=com.reecedunn.espeak
-code=$(curl -fsSL "https://f-droid.org/api/v1/packages/$ESPEAK" | python3 -c 'import json,sys; print(json.load(sys.stdin)["suggestedVersionCode"])' || true)
-if [ -n "$code" ] && curl -fsSL --retry 3 -o espeak.apk "https://f-droid.org/repo/${ESPEAK}_${code}.apk"; then
-  adb install -r espeak.apk && adb shell settings put secure tts_default_synth $ESPEAK || true
-  # eSpeak unpacks its voice data the first time its own screen opens.
-  adb shell am start -W -n $ESPEAK/.DownloadVoiceData || true
-  sleep 15
-  adb shell input keyevent KEYCODE_BACK; sleep 1
-else
-  echo "Couldn't fetch eSpeak NG; read-aloud won't be testable"
+# eSpeak NG normally comes from the cached snapshot (emulator-setup.sh); add it if not.
+if ! adb shell pm list packages | grep -q com.reecedunn.espeak; then
+  bash .github/scripts/emulator-setup.sh
 fi
 adb shell wm size > "$OUT/screen.txt"
 read -r W H < <(adb shell wm size | sed -n 's/.*: \([0-9]*\)x\([0-9]*\).*/\1 \2/p' | tail -1)
