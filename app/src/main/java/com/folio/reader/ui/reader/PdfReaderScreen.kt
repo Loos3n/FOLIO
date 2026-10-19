@@ -667,7 +667,12 @@ private fun Converting(progress: Pair<Int, Int>, modifier: Modifier = Modifier) 
             .fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("Getting this PDF ready to read", style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center)
+        Text(
+            "Getting this PDF ready to read",
+            style = MaterialTheme.typography.titleLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+            textAlign = TextAlign.Center,
+        )
         Spacer(Modifier.height(8.dp))
         Text(
             "Folio is laying out its text like an e-book, so it fits your screen and settings. This happens once.",

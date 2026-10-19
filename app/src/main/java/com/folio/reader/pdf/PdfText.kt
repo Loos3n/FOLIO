@@ -4,6 +4,9 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -45,6 +48,8 @@ class PdfText(
 object PdfTextConverter {
     private const val HOST = "folio.pdf"
     private const val ORIGIN = "https://$HOST/"
+    private const val QUIET_LIMIT_MS = 90_000L
+    private val main = Handler(Looper.getMainLooper())
 
     suspend fun extract(context: Context, pdf: File, onProgress: (done: Int, total: Int) -> Unit): PdfText =
         withTimeout(10 * 60_000L) {
@@ -53,7 +58,7 @@ object PdfTextConverter {
                     val webView = createWebView(context.applicationContext, pdf, onProgress) { result ->
                         if (cont.isActive) result.fold({ cont.resume(it) }, { cont.resumeWithException(it) })
                     }
-                    cont.invokeOnCancellation { webView.post { webView.destroy() } }
+                    cont.invokeOnCancellation { main.post { webView.destroy() } }
                 }
             }
         }
@@ -67,14 +72,29 @@ object PdfTextConverter {
     ): WebView {
         val webView = WebView(context)
         var done = false
+        val lastSign = java.util.concurrent.atomic.AtomicLong(SystemClock.elapsedRealtime())
+        // Posted to the main thread's handler, not the WebView: a WebView that was never put
+        // on screen never runs what is posted to it.
         fun finish(result: Result<PdfText>) {
-            webView.post {
+            main.post {
                 if (done) return@post
                 done = true
                 finished(result)
                 webView.destroy()
             }
         }
+        // Gives up if the page goes quiet (no progress and no answer) for a long while.
+        val watchdog = object : Runnable {
+            override fun run() {
+                if (done) return
+                if (SystemClock.elapsedRealtime() - lastSign.get() > QUIET_LIMIT_MS) {
+                    finish(Result.failure(IOException("Reading this PDF's text stalled.")))
+                } else {
+                    main.postDelayed(this, 5_000)
+                }
+            }
+        }
+        main.postDelayed(watchdog, 5_000)
         webView.settings.apply {
             javaScriptEnabled = true
             allowFileAccess = false
@@ -82,7 +102,15 @@ object PdfTextConverter {
         }
         webView.addJavascriptInterface(object {
             @JavascriptInterface
-            fun progress(done: Int, total: Int) = onProgress(done, total)
+            fun progress(done: Int, total: Int) {
+                lastSign.set(SystemClock.elapsedRealtime())
+                onProgress(done, total)
+            }
+
+            @JavascriptInterface
+            fun working() {
+                lastSign.set(SystemClock.elapsedRealtime())
+            }
 
             @JavascriptInterface
             fun done(json: String) {
@@ -152,6 +180,7 @@ object PdfTextConverter {
                 return FolioPdf.convert(pdfjsLib, new Uint8Array(buf), {
                   cMapUrl: '${ORIGIN}pdfjs/cmaps/',
                   onProgress: function (i, n) { FolioConvert.progress(i, n); },
+                  onWorking: function () { FolioConvert.working(); },
                 });
               })
               .then(function (r) { FolioConvert.done(JSON.stringify(r)); })

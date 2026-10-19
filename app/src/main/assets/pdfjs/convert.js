@@ -300,13 +300,19 @@
       chapters: [],
     };
     if (!scanned) {
-      var outline = await outlinePages(doc);
+      if (opts.onWorking) opts.onWorking();
+      // A damaged table of contents mustn't hold everything up.
+      var outline = await Promise.race([
+        outlinePages(doc),
+        new Promise(function (done) { setTimeout(function () { done({}); }, 15000); }),
+      ]);
+      if (opts.onWorking) opts.onWorking();
       var laid = layout(pages, outline);
       result.chapters = chapters(laid.blocks, laid.body, doc.numPages).map(function (c) {
         return { title: c.title, page: c.page, html: c.html.join('\n') };
       });
     }
-    await doc.destroy();
+    doc.destroy().catch(function () {});
     return result;
   }
 

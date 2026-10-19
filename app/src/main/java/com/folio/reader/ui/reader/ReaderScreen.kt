@@ -1635,7 +1635,7 @@ private fun ThemeSwatch(label: String, theme: ReaderTheme?, selected: Boolean, o
 @Composable
 internal fun ErrorView(message: String, onBack: () -> Unit, modifier: Modifier = Modifier) {
     Column(modifier.padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Text("Couldn't open this book", style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center)
+        Text("Couldn't open this book", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurface, textAlign = TextAlign.Center)
         Spacer(Modifier.height(8.dp))
         Text(message, textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(24.dp))
