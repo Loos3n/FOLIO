@@ -18,6 +18,9 @@ import android.webkit.WebView
 @SuppressLint("ViewConstructor")
 class FolioWebView(context: Context) : WebView(context) {
 
+    /** The chapter request last loaded, so the same one isn't loaded twice. */
+    var loadedToken: Long = -1
+
     var selectionActions: List<String> = emptyList()
     var onSelectionAction: (action: Int, json: String) -> Unit = { _, _ -> }
 

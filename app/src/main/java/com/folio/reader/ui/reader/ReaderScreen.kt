@@ -3,6 +3,8 @@
 package com.folio.reader.ui.reader
 
 import android.annotation.SuppressLint
+import com.folio.reader.audio.SpeechPlayer
+import android.os.PowerManager
 import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -235,6 +237,8 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
     var sleepEndsAt by remember { mutableStateOf<Long?>(null) }
     var sleepAtChapterEnd by remember { mutableStateOf(false) }
     var showReadAloudSheet by remember { mutableStateOf(false) }
+    /** Read-aloud bookkeeping that must work with the screen off, outside Compose state. */
+    val speechFlags = remember { SpeechFlags() }
     val readAloud = remember {
         lateinit var self: ReadAloud
         ReadAloud(
@@ -247,7 +251,11 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
                     self.stop()
                     webView?.evaluateJavascript("window.folio && folio.ttsStop()", null)
                 } else if (vm.hasNextChapter()) {
+                    // Load the next chapter straight away rather than waiting for the screen to
+                    // update: with the screen off it doesn't, and reading would stall.
+                    speechFlags.awaitingNext = true
                     vm.nextChapter()
+                    vm.request.value?.let { r -> webView?.show(r, vm) }
                 } else {
                     self.stop()
                 }
@@ -293,12 +301,16 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
     fun startReading() {
         val wv = webView ?: return
         autoScrolling = false
-        readingRequest = request
+        // From the view model rather than Compose state, which goes stale with the screen off.
+        readingRequest = vm.request.value
+        speechFlags.awaitingNext = false
+        speechFlags.standingBy = false
         readAloud.setLanguage(vm.language)
         wv.evaluateJavascript("window.folio ? folio.ttsStart() : null") { json ->
             if (json == null || json == "null") {
                 // The page isn't ready yet; start as soon as it reports in.
                 readingRequest = null
+                speechFlags.standingBy = true
                 readAloud.standBy()
                 return@evaluateJavascript
             }
@@ -319,10 +331,62 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
     fun togglePause() {
         if (readAloud.paused) {
             // Carry on where it stopped, unless the reader has moved to another page since.
-            if (pausedAt == (request to state.page)) readAloud.resume() else startReading()
+            if (pausedAt == (vm.request.value to vm.state.value.page)) readAloud.resume() else startReading()
         } else {
-            pausedAt = request to state.page
+            pausedAt = vm.request.value to vm.state.value.page
             readAloud.pause()
+        }
+    }
+
+    // Read-aloud with the screen off: a media session (lock screen, notification, headphone
+    // buttons), a wake lock so the phone doesn't doze between sentences and chapters, and
+    // the next chapter started as soon as it's laid out.
+    val app = context.applicationContext as FolioApp
+    val wakeLock = remember {
+        (context.getSystemService(Context.POWER_SERVICE) as PowerManager)
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Folio:read-aloud")
+            .apply { setReferenceCounted(false) }
+    }
+    fun syncSpeech() {
+        val s = vm.state.value
+        val cover = app.library.get(bookId)?.let { app.library.coverFile(it) }?.let { Uri.fromFile(it) }
+        val speaking = readAloud.active && !readAloud.paused
+        if (speaking) wakeLock.acquire(3 * 60 * 60 * 1000L) else if (wakeLock.isHeld) wakeLock.release()
+        if (readAloud.active && !speechFlags.announced) {
+            speechFlags.announced = true
+            app.audio.speechStarted()
+        }
+        app.audio.speech.update(readAloud.active, speaking, s.title, s.chapterTitle, cover)
+        if (!readAloud.active && speechFlags.announced) {
+            speechFlags.announced = false
+            app.audio.speechStopped()
+        }
+    }
+    speechFlags.onChapterReady = {
+        if (readAloud.active && !readAloud.paused && (speechFlags.awaitingNext || speechFlags.standingBy)) startReading()
+        syncSpeech()
+    }
+    DisposableEffect(readAloud) {
+        readAloud.onStateChange = { syncSpeech() }
+        app.audio.speech.controls = object : SpeechPlayer.Controls {
+            override fun play() {
+                if (!readAloud.active) startReading() else if (readAloud.paused) togglePause()
+            }
+
+            override fun pause() {
+                if (readAloud.active && !readAloud.paused) togglePause()
+            }
+
+            override fun stop() = stopReading()
+            override fun skip(sentences: Int) = readAloud.skip(sentences)
+        }
+        onDispose {
+            readAloud.onStateChange = {}
+            app.audio.speech.controls = null
+            app.audio.speech.update(false, false, "", "", null)
+            if (speechFlags.announced) app.audio.speechStopped()
+            speechFlags.announced = false
+            if (wakeLock.isHeld) wakeLock.release()
         }
     }
 
@@ -417,6 +481,7 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit) {
                         }
                     },
                     onCreated = { webView = it },
+                    onChapterReady = { speechFlags.onChapterReady() },
                     modifier = Modifier
                         .fillMaxSize()
                         .windowInsetsPadding(WindowInsets.systemBarsIgnoringVisibility.union(WindowInsets.displayCutout))
@@ -745,8 +810,10 @@ private fun BookWebView(
     onSelection: (action: Int, json: String) -> Unit,
     onHighlightTap: (id: String) -> Unit,
     onCreated: (FolioWebView?) -> Unit,
+    onChapterReady: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val currentOnChapterReady = rememberUpdatedState(onChapterReady)
     val context = LocalContext.current
     val currentOnManualTurn = rememberUpdatedState(onManualTurn)
     val currentOnSelection = rememberUpdatedState(onSelection)
@@ -781,7 +848,12 @@ private fun BookWebView(
             addJavascriptInterface(
                 ReaderBridge(
                     pageChanged = { info -> view.post { vm.onPage(info) } },
-                    loaded = { info -> view.post { vm.onPage(info) } },
+                    loaded = { info ->
+                        view.post {
+                            vm.onPage(info)
+                            currentOnChapterReady.value()
+                        }
+                    },
                     tapped = { zone -> view.post { currentOnTap.value(zone) } },
                     nextRequested = { vm.hasNextChapter().also { if (it) view.post { vm.nextChapter() } } },
                     prevRequested = { vm.hasPrevChapter().also { if (it) view.post { vm.prevChapter() } } },
@@ -830,8 +902,7 @@ private fun BookWebView(
 
     LaunchedEffect(request) {
         val r = request ?: return@LaunchedEffect
-        val path = vm.book?.spine?.getOrNull(r.index)?.path ?: return@LaunchedEffect
-        webView.loadUrl(ReaderContent.urlFor(path))
+        webView.show(r, vm)
     }
 
     // Restyle the page in place, except when switching between pages and scrolling: then
@@ -856,6 +927,25 @@ private fun BookWebView(
     }
 
     AndroidView(factory = { webView }, modifier = modifier)
+}
+
+/** Loads the chapter a request asks for, once (read-aloud may already have loaded it). */
+private fun FolioWebView.show(r: ChapterRequest, vm: ReaderViewModel) {
+    if (loadedToken == r.token) return
+    val path = vm.book?.spine?.getOrNull(r.index)?.path ?: return
+    loadedToken = r.token
+    loadUrl(ReaderContent.urlFor(path))
+}
+
+/** Read-aloud state kept outside Compose, so it stays current with the screen off. */
+private class SpeechFlags {
+    /** Reading reached the end of a chapter; carry on once the next one is laid out. */
+    var awaitingNext = false
+    /** Asked to read before the page was ready. */
+    var standingBy = false
+    /** The media session has been told read-aloud is on. */
+    var announced = false
+    var onChapterReady: () -> Unit = {}
 }
 
 /** The menu over selected text; [onSelection] in ReaderScreen handles them by position. */

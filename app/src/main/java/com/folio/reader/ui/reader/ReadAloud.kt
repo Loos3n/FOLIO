@@ -32,6 +32,8 @@ class ReadAloud(
     /** False if the phone has no working text-to-speech engine. */
     var available by mutableStateOf(true)
         private set
+    /** Called after [active] or [paused] changes, also while the app is in the background. */
+    var onStateChange: () -> Unit = {}
     private var rateState by mutableFloatStateOf(1f)
     /** Speech speed (1 = normal). A change is heard from the current sentence on. */
     var rate: Float
@@ -194,6 +196,16 @@ class ReadAloud(
         active = true
         paused = false
         if (ready) speak(0) else pendingStart = { speak(0) }
+        onStateChange()
+    }
+
+    /** Jumps [delta] sentences back or forward in what's being read. */
+    fun skip(delta: Int) {
+        if (!active || sentences.isEmpty()) return
+        run++
+        paused = false
+        speak((index + delta).coerceIn(0, sentences.lastIndex))
+        onStateChange()
     }
 
     /** Shows the player without speaking yet, e.g. while the next chapter loads. */
@@ -202,6 +214,7 @@ class ReadAloud(
         active = true
         paused = false
         if (ready) tts.stop()
+        onStateChange()
     }
 
     fun pause() {
@@ -209,6 +222,7 @@ class ReadAloud(
         run++
         paused = true
         tts.stop()
+        onStateChange()
     }
 
     fun resume() {
@@ -216,6 +230,7 @@ class ReadAloud(
         run++
         paused = false
         speak(index)
+        onStateChange()
     }
 
     fun stop() {
@@ -224,6 +239,7 @@ class ReadAloud(
         paused = false
         pendingStart = null
         if (ready) tts.stop()
+        onStateChange()
     }
 
     fun shutdown() {

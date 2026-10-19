@@ -297,6 +297,31 @@ adb shell input keyevent KEYCODE_HOME; sleep 8
 adb shell dumpsys media_session > "$OUT/media-session.txt" 2>&1 || true
 adb shell run-as $PKG cat files/library.json > "$OUT/library-audio.json" || true
 
+# Read-aloud with the screen off: start on the short opening chapters, turn the screen off,
+# and check that it keeps going (into later chapters) with lock-screen controls.
+adb shell am force-stop $PKG; sleep 2
+printf '[{"id":"test","title":"Crime and Punishment","author":"Fyodor Dostoyevsky","fileName":"test.epub","coverFileName":null,"addedAt":1,"lastOpenedAt":0,"progress":0,"chapterIndex":0,"chapterOffset":0}]' \
+  | adb exec-in run-as $PKG sh -c 'cat > files/library.json'
+adb shell am start -W -n $PKG/.MainActivity --es open_book test
+sleep 8
+adb shell input tap $((W / 2)) $((H / 2)); sleep 2
+tap_label "Read aloud"
+sleep 3
+adb shell dumpsys media_session > "$OUT/40-speech-session-on.txt" 2>&1 || true
+adb shell input keyevent KEYCODE_SLEEP
+for i in 1 2 3 4; do
+  sleep 30
+  adb shell dumpsys media_session > "$OUT/41-speech-session-off-$i.txt" 2>&1 || true
+  adb shell dumpsys power | grep -iE "folio|mWakefulness=" >> "$OUT/41-power.txt" 2>&1 || true
+done
+adb shell input keyevent KEYCODE_WAKEUP; sleep 3
+adb exec-out screencap -p > "$OUT/42-lock-screen.png"
+adb shell input keyevent KEYCODE_MEDIA_PAUSE; sleep 2
+adb shell dumpsys media_session > "$OUT/43-after-pause.txt" 2>&1 || true
+adb shell wm dismiss-keyguard; sleep 2
+adb exec-out screencap -p > "$OUT/44-reader-after.png"
+adb shell run-as $PKG cat files/library.json > "$OUT/library-speech.json" || true
+
 adb shell dumpsys package com.svox.pico > /dev/null 2>&1 && echo "pico present" >> "$OUT/tts.txt"
 adb shell settings get secure tts_default_synth >> "$OUT/tts.txt" 2>&1 || true
 

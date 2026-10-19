@@ -9,6 +9,9 @@ import androidx.media3.session.MediaSessionService
 import com.folio.reader.FolioApp
 import com.folio.reader.MainActivity
 import com.folio.reader.R
+import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 
 /**
  * Keeps an audiobook playing in the background, with the media notification, lock-screen
@@ -16,6 +19,7 @@ import com.folio.reader.R
  */
 class PlaybackService : MediaSessionService() {
     private var session: MediaSession? = null
+    private val scope = MainScope()
 
     override fun onCreate() {
         super.onCreate()
@@ -33,7 +37,7 @@ class PlaybackService : MediaSessionService() {
             .setIconResId(R.drawable.ic_forward_30)
             .setPlayerCommand(Player.COMMAND_SEEK_FORWARD)
             .build()
-        val s = MediaSession.Builder(this, app.audio.sessionPlayer())
+        val s = MediaSession.Builder(this, app.audio.sessionTargetNow())
             .setSessionActivity(
                 PendingIntent.getActivity(this, 0, open, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT),
             )
@@ -42,6 +46,10 @@ class PlaybackService : MediaSessionService() {
         session = s
         // Started directly by the app rather than by a controller connecting, so register it here.
         addSession(s)
+        // Follow whichever is speaking: an audiobook or read-aloud.
+        scope.launch {
+            app.audio.sessionTarget.collect { target -> if (target != null && s.player !== target) s.player = target }
+        }
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
@@ -53,6 +61,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        scope.cancel()
         session?.release() // the player outlives the service; only the session goes
         session = null
         super.onDestroy()

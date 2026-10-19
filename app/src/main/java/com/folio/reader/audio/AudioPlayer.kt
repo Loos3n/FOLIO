@@ -57,6 +57,31 @@ class AudioPlayer(private val app: FolioApp) {
     private val _state = MutableStateFlow(ListenState())
     val state: StateFlow<ListenState> = _state.asStateFlow()
 
+    /** Read-aloud in the reader, as the notification and lock screen see it. */
+    val speech = SpeechPlayer()
+    private val audiobookSession by lazy { sessionPlayer() }
+    private val speechSession by lazy { speech.sessionPlayer() }
+    private val _sessionTarget = MutableStateFlow<Player?>(null)
+
+    /** Which of the two the media session controls: the audiobook player or read-aloud. */
+    val sessionTarget: StateFlow<Player?> = _sessionTarget.asStateFlow()
+
+    fun sessionTargetNow(): Player = _sessionTarget.value ?: audiobookSession
+
+    /** Read-aloud started: pause any audiobook and hand the lock screen and headphones to it. */
+    fun speechStarted() {
+        pause()
+        _sessionTarget.value = speechSession
+        runCatching { app.startService(Intent(app, PlaybackService::class.java)) }
+    }
+
+    /** Read-aloud ended: give the controls back to the audiobook, or put them away. */
+    fun speechStopped() {
+        if (_sessionTarget.value !== speechSession) return
+        _sessionTarget.value = audiobookSession
+        if (_state.value.bookId == null) app.stopService(Intent(app, PlaybackService::class.java))
+    }
+
     init {
         // Keep track lengths and chapters current if the book changes in the library.
         scope.launch {
@@ -107,7 +132,7 @@ class AudioPlayer(private val app: FolioApp) {
     }
 
     /** The player as the notification and lock screen see it: skip buttons move between chapters. */
-    fun sessionPlayer(): Player = object : ForwardingPlayer(player()) {
+    private fun sessionPlayer(): Player = object : ForwardingPlayer(player()) {
         override fun getAvailableCommands(): Player.Commands = super.getAvailableCommands().buildUpon()
             .add(Player.COMMAND_SEEK_TO_NEXT).add(Player.COMMAND_SEEK_TO_PREVIOUS)
             .add(Player.COMMAND_SEEK_BACK).add(Player.COMMAND_SEEK_FORWARD)
@@ -156,6 +181,8 @@ class AudioPlayer(private val app: FolioApp) {
     fun play() {
         val p = exo ?: return
         _state.value = _state.value.copy(error = null)
+        speech.controls?.stop() // one voice at a time
+        _sessionTarget.value = audiobookSession
         if (p.playbackState == Player.STATE_IDLE) p.prepare()
         if (p.playbackState == Player.STATE_ENDED) seekTo(0)
         // The service keeps playback going in the background and shows the notification.
@@ -223,7 +250,7 @@ class AudioPlayer(private val app: FolioApp) {
         exo?.clearMediaItems()
         info = null
         _state.value = ListenState()
-        app.stopService(Intent(app, PlaybackService::class.java))
+        if (_sessionTarget.value !== speechSession) app.stopService(Intent(app, PlaybackService::class.java))
     }
 
     private fun startTicker() {
