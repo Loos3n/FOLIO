@@ -310,7 +310,11 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
     LaunchedEffect(autoScrolling) { autoPaused = false }
 
     var readingRequest by remember { mutableStateOf<ChapterRequest?>(null) }
-    var pausedAt by remember { mutableStateOf<Pair<ChapterRequest?, Int>?>(null) }
+    // Whether the reader went somewhere else while read-aloud was paused (however it was
+    // paused: here, the notification or headphones). If not, it carries on mid-page.
+    var movedWhilePaused by remember { mutableStateOf(false) }
+    LaunchedEffect(readAloud.paused) { if (readAloud.paused) movedWhilePaused = false }
+    LaunchedEffect(request) { if (readAloud.paused) movedWhilePaused = true }
     var restartJob by remember { mutableStateOf<Job?>(null) }
 
     fun startReading() {
@@ -345,10 +349,9 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
 
     fun togglePause() {
         if (readAloud.paused) {
-            // Carry on where it stopped, unless the reader has moved to another page since.
-            if (pausedAt == (vm.request.value to vm.state.value.page)) readAloud.resume() else startReading()
+            // Carry on from the sentence it stopped in, unless the reader has moved elsewhere since.
+            if (movedWhilePaused) startReading() else readAloud.resume()
         } else {
-            pausedAt = vm.request.value to vm.state.value.page
             readAloud.pause()
         }
     }
@@ -427,6 +430,7 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
     }
 
     val onManualTurn: () -> Unit = {
+        if (readAloud.paused) movedWhilePaused = true
         if (readAloud.active && !readAloud.paused) {
             restartJob?.cancel()
             restartJob = scope.launch {
