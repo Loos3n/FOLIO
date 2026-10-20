@@ -2,6 +2,11 @@
 
 package com.folio.reader.ui.reader
 
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.Animatable
+import androidx.compose.ui.graphics.TransformOrigin
+import com.folio.reader.data.PageTurn
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material.icons.filled.Add
 import android.widget.Toast
@@ -585,17 +590,21 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
                 }
             }
 
-            // A ribbon on bookmarked pages.
-            if (bookmarkHere != null && !state.loading && state.error == null) {
+            // A ribbon on bookmarked pages, dropping in from the top edge.
+            AnimatedVisibility(
+                visible = bookmarkHere != null && !state.loading && state.error == null,
+                enter = slideInVertically(spring(dampingRatio = 0.55f, stiffness = 500f)) { -it * 2 } + fadeIn(),
+                exit = slideOutVertically(tween(180)) { -it * 2 } + fadeOut(tween(180)),
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .windowInsetsPadding(WindowInsets.systemBarsIgnoringVisibility.only(WindowInsetsSides.Top))
+                    .padding(end = 20.dp),
+            ) {
                 Icon(
                     ReaderIcons.Bookmark,
                     contentDescription = "This page is bookmarked",
                     tint = Color(theme.link),
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .windowInsetsPadding(WindowInsets.systemBarsIgnoringVisibility.only(WindowInsetsSides.Top))
-                        .padding(end = 20.dp)
-                        .size(width = 22.dp, height = 30.dp),
+                    modifier = Modifier.size(width = 22.dp, height = 30.dp),
                 )
             }
 
@@ -877,6 +886,9 @@ private fun BookWebView(
     val css = remember(prefs, theme, scroll) { ReaderContent.css(prefs, theme, scroll) }
     val currentCss = rememberUpdatedState(css)
     val currentOnTap = rememberUpdatedState(onTap)
+    val currentTurn = rememberUpdatedState(prefs.pageTurn)
+    val turner = remember { PageTurner() }
+    val turnScope = rememberCoroutineScope()
 
     val webView = remember {
         FolioWebView(context).apply {
@@ -906,8 +918,10 @@ private fun BookWebView(
                     pageChanged = { info -> view.post { vm.onPage(info) } },
                     loaded = { info ->
                         view.post {
+                            view.evaluateJavascript("window.folio && folio.setTurn && folio.setTurn('${currentTurn.value.js}')", null)
                             vm.onPage(info)
                             currentOnChapterReady.value()
+                            turner.chapterReady()
                         }
                     },
                     tapped = { zone -> view.post { currentOnTap.value(zone) } },
@@ -916,6 +930,14 @@ private fun BookWebView(
                     manualTurn = { view.post { currentOnManualTurn.value() } },
                     highlightTapped = { id -> view.post { currentOnHighlightTap.value(id) } },
                     footnoteTapped = { text, href -> view.post { currentOnFootnote.value(text, href) } },
+                    turnRequested = { forward, edge ->
+                        // At the very start or end of the book there's nowhere to turn to.
+                        val turns = !edge || (if (forward) vm.hasNextChapter() else vm.hasPrevChapter())
+                        view.post {
+                            val move = { view.evaluateJavascript(if (forward) "window.folio && folio.next(true)" else "window.folio && folio.prev(true)", null) }
+                            if (turns) turner.turn(turnScope, view, forward, edge, move) else move()
+                        }
+                    },
                 ),
                 "FolioBridge",
             )
@@ -993,7 +1015,24 @@ private fun BookWebView(
         }
     }
 
-    AndroidView(factory = { webView }, modifier = modifier)
+    LaunchedEffect(prefs.pageTurn) {
+        webView.evaluateJavascript("window.folio && folio.setTurn && folio.setTurn('${prefs.pageTurn.js}')", null)
+    }
+
+    Box(modifier) {
+        PageTurnUnder(turner)
+        AndroidView(
+            factory = { webView },
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    transformOrigin = TransformOrigin(0f, 0.5f)
+                    rotationY = turner.bookAngle()
+                    cameraDistance = 14f * density
+                },
+        )
+        PageTurnOver(turner)
+    }
 }
 
 /** Loads the chapter a request asks for, once (read-aloud may already have loaded it). */
@@ -1070,11 +1109,25 @@ private fun ReaderTopBar(
                     )
                 }
             }
+            // A little pop when a page is bookmarked.
+            val pop = remember { Animatable(1f) }
+            var wasBookmarked by remember { mutableStateOf(bookmarked) }
+            LaunchedEffect(bookmarked) {
+                if (bookmarked && !wasBookmarked) {
+                    pop.snapTo(0.55f)
+                    pop.animateTo(1f, spring(dampingRatio = 0.35f, stiffness = 600f))
+                }
+                wasBookmarked = bookmarked
+            }
             IconButton(onClick = onBookmark) {
                 Icon(
                     if (bookmarked) ReaderIcons.Bookmark else ReaderIcons.BookmarkBorder,
                     contentDescription = if (bookmarked) "Remove bookmark" else "Bookmark this page",
                     tint = if (bookmarked) MaterialTheme.colorScheme.primary else LocalContentColor.current,
+                    modifier = Modifier.graphicsLayer {
+                        scaleX = pop.value
+                        scaleY = pop.value
+                    },
                 )
             }
         }
@@ -1540,6 +1593,17 @@ internal fun SettingsSheet(
             }
             if (scrollMode) {
                 SwitchRow("Reading ruler", settings.ruler) { on -> onChange { it.copy(ruler = on) } }
+            } else {
+                SectionLabel("Page turn")
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                    PageTurn.entries.forEachIndexed { i, t ->
+                        SegmentedButton(
+                            selected = settings.pageTurn == t,
+                            onClick = { onChange { it.copy(pageTurn = t) } },
+                            shape = SegmentedButtonDefaults.itemShape(i, PageTurn.entries.size),
+                        ) { Text(t.label) }
+                    }
+                }
             }
 
             SectionLabel("Theme")

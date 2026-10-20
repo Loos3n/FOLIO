@@ -127,13 +127,14 @@ internal fun StatsSheet(
             val days = stats.streak(today, goalMinutes)
             val todaySeconds = stats.secondsOn(today)
             val met = goalMinutes > 0 && todaySeconds >= goalMinutes * 60L
+            val ring = rememberGrow(if (goalMinutes > 0) (todaySeconds / (goalMinutes * 60f)).coerceIn(0f, 1f) else 0f)
             Surface(color = scheme.primaryContainer, contentColor = scheme.onPrimaryContainer, shape = RoundedCornerShape(24.dp)) {
                 Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 20.dp, bottom = 8.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Box(Modifier.size(56.dp), contentAlignment = Alignment.Center) {
                             if (goalMinutes > 0) {
                                 CircularProgressIndicator(
-                                    progress = { (todaySeconds / (goalMinutes * 60f)).coerceIn(0f, 1f) },
+                                    progress = { ring.value },
                                     modifier = Modifier.fillMaxSize(),
                                     strokeWidth = 5.dp,
                                     trackColor = scheme.primary.copy(alpha = 0.18f),
@@ -189,6 +190,7 @@ internal fun StatsSheet(
             Surface(color = scheme.surfaceContainerHigh, shape = RoundedCornerShape(24.dp)) {
                 Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 16.dp, bottom = 8.dp)) {
                     val n = finishedThisYear.size
+                    val yearFill = rememberGrow(if (yearGoal > 0) (n / yearGoal.toFloat()).coerceIn(0f, 1f) else 0f)
                     Text(
                         when {
                             yearGoal > 0 -> "$n of $yearGoal books"
@@ -205,7 +207,7 @@ internal fun StatsSheet(
                     if (yearGoal > 0) {
                         Spacer(Modifier.height(10.dp))
                         LinearProgressIndicator(
-                            progress = { (n / yearGoal.toFloat()).coerceIn(0f, 1f) },
+                            progress = { yearFill.value },
                             modifier = Modifier.fillMaxWidth().padding(end = 8.dp).height(8.dp).clip(RoundedCornerShape(4.dp)),
                             trackColor = scheme.primary.copy(alpha = 0.15f),
                             strokeCap = StrokeCap.Round,
@@ -272,6 +274,7 @@ internal fun StatsSheet(
                 week.forEach { day ->
                     val s = stats.days[day.toString()]?.seconds ?: 0L
                     val isToday = day == today
+                    val bar = rememberGrow(s.toFloat() / maxSeconds)
                     Column(Modifier.weight(1f).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
                             if (s >= 60) "${s / 60}" else "",
@@ -282,7 +285,7 @@ internal fun StatsSheet(
                             Box(
                                 Modifier
                                     .fillMaxWidth()
-                                    .fillMaxHeight((s.toFloat() / maxSeconds).coerceIn(0.02f, 1f))
+                                    .fillMaxHeight(bar.value.coerceIn(0.02f, 1f))
                                     .clip(RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp, bottomStart = 3.dp, bottomEnd = 3.dp))
                                     .background(if (isToday) scheme.primary else scheme.primary.copy(alpha = 0.35f)),
                             )

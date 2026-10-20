@@ -2,6 +2,12 @@
 
 package com.folio.reader.ui.library
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.runtime.State
+import kotlinx.coroutines.delay
+import androidx.compose.ui.graphics.graphicsLayer
 import com.folio.reader.ui.reader.SettingsSheet
 import com.folio.reader.ui.reader.ReaderIcons
 import android.net.Uri
@@ -168,6 +174,12 @@ fun LibraryScreen(
     }
 
     val gridState = rememberLazyGridState()
+    // Books arrive one after another when the library opens; later changes just move them.
+    var intro by remember { mutableStateOf(true) }
+    LaunchedEffect(Unit) {
+        delay(1_500)
+        intro = false
+    }
     val fabExpanded by remember { derivedStateOf { gridState.firstVisibleItemIndex < 2 } }
 
     Scaffold(
@@ -263,6 +275,7 @@ fun LibraryScreen(
                     }
                 }
                 items(books, key = { it.id }) { book ->
+                    val index = books.indexOf(book)
                     BookTile(
                         book = book,
                         vm = vm,
@@ -271,7 +284,7 @@ fun LibraryScreen(
                         onCollections = { editingCollections = book },
                         onEdit = { editingDetails = book },
                         preparing = preparing[book.id],
-                        modifier = Modifier.animateItem(),
+                        modifier = Modifier.animateItem().entrance(index, intro),
                     )
                 }
                 if (query.isBlank()) {
@@ -385,6 +398,29 @@ fun LibraryScreen(
             },
             dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("Cancel") } },
         )
+    }
+}
+
+/** A progress value that fills from empty when first shown, then follows changes. */
+@Composable
+internal fun rememberGrow(target: Float): State<Float> {
+    val value = remember { Animatable(0f) }
+    LaunchedEffect(target) { value.animateTo(target, tween(700, easing = FastOutSlowInEasing)) }
+    return value.asState()
+}
+
+/** Fades and lifts an item in when the library first appears, one after another. */
+@Composable
+private fun Modifier.entrance(index: Int, play: Boolean): Modifier {
+    if (!play) return this
+    val shown = remember { Animatable(0f) }
+    LaunchedEffect(Unit) {
+        delay(45L * index.coerceAtMost(12))
+        shown.animateTo(1f, tween(420, easing = FastOutSlowInEasing))
+    }
+    return this.graphicsLayer {
+        alpha = shown.value
+        translationY = (1f - shown.value) * 28.dp.toPx()
     }
 }
 
@@ -587,6 +623,7 @@ private fun Modifier.layoutBleed(bleed: Dp) = this.then(
 
 @Composable
 private fun ContinueCard(book: Book, vm: LibraryViewModel, onOpen: (String) -> Unit, single: Boolean) {
+    val grow = rememberGrow(book.progress)
     val scheme = MaterialTheme.colorScheme
     Surface(
         onClick = { onOpen(book.id) },
@@ -630,7 +667,7 @@ private fun ContinueCard(book: Book, vm: LibraryViewModel, onOpen: (String) -> U
                     }
                     Spacer(Modifier.height(14.dp))
                     LinearProgressIndicator(
-                        progress = { book.progress },
+                        progress = { grow.value },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(6.dp)
@@ -705,6 +742,7 @@ private fun BookTile(
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    val grow = rememberGrow(book.progress)
     Column(modifier) {
         Box {
             Box(
@@ -753,7 +791,7 @@ private fun BookTile(
             Spacer(Modifier.height(10.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 LinearProgressIndicator(
-                    progress = { book.progress },
+                    progress = { grow.value },
                     modifier = Modifier
                         .weight(1f)
                         .height(4.dp)

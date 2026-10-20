@@ -20,6 +20,13 @@ enum class ReaderFont(val label: String, val css: String?) {
     Atkinson("Atkinson", "'Folio Atkinson', 'Roboto', sans-serif"),
 }
 
+/** How a page changes in page mode. */
+enum class PageTurn(val label: String, val js: String) {
+    Turn("Turn", "turn"),
+    Slide("Slide", "slide"),
+    Off("None", "none"),
+}
+
 data class ReaderSettings(
     /** WebView text zoom in percent. */
     val textZoom: Int = 110,
@@ -57,6 +64,7 @@ data class ReaderSettings(
     val customFont: String? = null,
     /** Books to finish this year; 0 = no goal. */
     val yearlyBookGoal: Int = 0,
+    val pageTurn: PageTurn = PageTurn.Turn,
 ) {
     fun resolvedTheme(systemDark: Boolean): ReaderTheme =
         theme ?: if (systemDark) ReaderTheme.Dark else ReaderTheme.Light
@@ -92,6 +100,7 @@ class SettingsRepository(context: Context) {
             .putBoolean("tapToTurn", next.tapToTurn)
             .putString("customFont", next.customFont)
             .putInt("yearlyBookGoal", next.yearlyBookGoal)
+            .putString("pageTurn", next.pageTurn.name)
             .apply()
     }
 
@@ -147,6 +156,7 @@ class SettingsRepository(context: Context) {
             tapToTurn = prefs.getBoolean("tapToTurn", d.tapToTurn),
             customFont = prefs.getString("customFont", null),
             yearlyBookGoal = prefs.getInt("yearlyBookGoal", d.yearlyBookGoal),
+            pageTurn = prefs.getString("pageTurn", null)?.let { n -> PageTurn.entries.firstOrNull { it.name == n } } ?: d.pageTurn,
         )
     }
 }

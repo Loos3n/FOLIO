@@ -285,6 +285,8 @@ object ReaderContent {
           var page = 0;
           var ready = false;
           var anim = null;
+          // How pages change: 'turn' (the app draws a page turning over), 'slide' or 'none'.
+          var turnStyle = 'slide';
           var curX = 0;
 
           function width() { return window.innerWidth || root.clientWidth || 0; }
@@ -575,6 +577,8 @@ object ReaderContent {
             if (axis !== 'x') return;
             moved = true;
             e.preventDefault();
+            // Only sliding pages follow the finger; a turn or a cut happens when it lifts.
+            if (turnStyle !== 'slide') return;
             var max = lastPage() * width();
             var x = sScroll - dx;
             // Resist a little past the first and last page of the chapter.
@@ -926,25 +930,37 @@ object ReaderContent {
           function userTurned() { if (tts && bridge && bridge.onManualTurn) bridge.onManualTurn(); }
 
           var folio = window.folio = {
-            next: function () {
+            setTurn: function (s) { turnStyle = s; },
+            // [direct]: the app is already drawing the turn, so just move.
+            next: function (direct) {
               if (leaving) return;
+              if (!scrollMode && !direct && turnStyle === 'turn' && bridge && bridge.turnPage) {
+                if (anim) { cancelAnimationFrame(anim); anim = null; setScroll(page * width()); }
+                bridge.turnPage(true, page >= lastPage());
+                return;
+              }
               if (scrollMode) {
                 if (window.scrollY >= readMax() - 2) { if (bridge && bridge.nextChapter()) leaving = true; }
                 else { scrollToY(window.scrollY + height() * 0.9, true); userTurned(); }
                 return;
               }
               if (page >= lastPage()) { if (anim) { cancelAnimationFrame(anim); anim = null; } setScroll(page * width()); if (bridge && bridge.nextChapter()) leaving = true; }
-              else { show(page + 1, true); userTurned(); }
+              else { show(page + 1, turnStyle === 'slide'); userTurned(); }
             },
-            prev: function () {
+            prev: function (direct) {
               if (leaving) return;
+              if (!scrollMode && !direct && turnStyle === 'turn' && bridge && bridge.turnPage) {
+                if (anim) { cancelAnimationFrame(anim); anim = null; setScroll(page * width()); }
+                bridge.turnPage(false, page <= 0);
+                return;
+              }
               if (scrollMode) {
                 if (window.scrollY <= 2) { if (bridge && bridge.prevChapter()) leaving = true; }
                 else { scrollToY(window.scrollY - height() * 0.9, true); userTurned(); }
                 return;
               }
               if (page <= 0) { if (anim) { cancelAnimationFrame(anim); anim = null; } setScroll(0); if (bridge && bridge.prevChapter()) leaving = true; }
-              else { show(page - 1, true); userTurned(); }
+              else { show(page - 1, turnStyle === 'slide'); userTurned(); }
             },
             // A short excerpt from the top of the page, to label a bookmark.
             snippet: function () {
@@ -1069,6 +1085,7 @@ class ReaderBridge(
     private val highlightTapped: (id: String) -> Unit = {},
     /** The reader tapped a footnote marker: the note's text, and the link to it. */
     private val footnoteTapped: (text: String, href: String) -> Unit = { _, _ -> },
+    private val turnRequested: (forward: Boolean, edge: Boolean) -> Unit = { _, _ -> },
 ) {
     @JavascriptInterface fun onPage(page: Int, count: Int, offset: Float, section: Int, sectionEnd: Int, charsLeft: Int, charAt: Int) =
         pageChanged(PageInfo(page, count, offset, section, sectionEnd, charsLeft, charAt))
@@ -1080,6 +1097,8 @@ class ReaderBridge(
     @JavascriptInterface fun onManualTurn() = manualTurn()
     @JavascriptInterface fun onHighlightTap(id: String) = highlightTapped(id)
     @JavascriptInterface fun onFootnote(text: String, href: String) = footnoteTapped(text, href)
+    /** A page turn the app should draw: which way, and whether it crosses into another chapter. */
+    @JavascriptInterface fun turnPage(forward: Boolean, edge: Boolean) = turnRequested(forward, edge)
 }
 
 /** Where the reader is in a chapter, as the page script reports it. */
