@@ -363,9 +363,12 @@ internal fun HighlightList(
 
 /** The meaning of a word picked on the page. */
 @Composable
-internal fun DictionarySheet(term: String, onWebSearch: () -> Unit, onDismiss: () -> Unit) {
+internal fun DictionarySheet(term: String, onWebSearch: () -> Unit, onDismiss: () -> Unit, onFound: (Definition) -> Unit = {}) {
     var result by remember(term) { mutableStateOf<Lookup>(Lookup.Loading) }
-    LaunchedEffect(term) { result = Dictionary.lookUp(term) }
+    LaunchedEffect(term) {
+        result = Dictionary.lookUp(term)
+        (result as? Lookup.Found)?.let { onFound(it.definition) }
+    }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState()) {
         Column(
             Modifier

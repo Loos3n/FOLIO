@@ -2,6 +2,12 @@
 
 package com.folio.reader.ui.reader
 
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.material.icons.filled.Add
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import com.folio.reader.data.UserFonts
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.zIndex
@@ -227,7 +233,7 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
                 editing = it
                 editingNote = true
             }
-            2 -> defineTerm = Dictionary.termFrom(text).ifEmpty { null }
+            2 -> defineTerm = Dictionary.termFrom(text).ifEmpty { null }?.also { vm.saveWord(it, sel.optString("ctx")) }
             3 -> clipboard.setPrimaryClip(ClipData.newPlainText("Folio", text))
         }
     }
@@ -797,6 +803,7 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
         defineTerm?.let { term ->
             DictionarySheet(
                 term = term,
+                onFound = { vm.saveMeaning(term, it) },
                 onWebSearch = {
                     runCatching {
                         context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/search?q=" + Uri.encode("define $term"))))
@@ -918,7 +925,10 @@ private fun BookWebView(
                     if (scheme != "http" && scheme != "https") return null
                     val book = vm.book ?: return ReaderContent.blocked()
                     return runCatching {
-                        ReaderContent.serve(book, assets, request.url, cssFor = { currentCss.value }, startFor = vm::startFor)
+                        ReaderContent.serve(
+                            book, assets, request.url, cssFor = { currentCss.value }, startFor = vm::startFor,
+                            userFont = (view.context.applicationContext as FolioApp).fonts::file,
+                        )
                     }.getOrElse { ReaderContent.blocked() }
                 }
 
@@ -1554,12 +1564,13 @@ internal fun SettingsSheet(
                     FontCard(
                         label = font.label,
                         family = family,
-                        selected = settings.font == font,
-                        onClick = { onChange { it.copy(font = font) } },
+                        selected = settings.customFont == null && settings.font == font,
+                        onClick = { onChange { it.copy(font = font, customFont = null) } },
                         modifier = Modifier.weight(1f),
                     )
                 }
             }
+            UserFontRow(settings, onChange)
 
             SectionLabel("Text size")
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1610,6 +1621,59 @@ internal fun SettingsSheet(
             SwitchRow("Turn pages by tapping the edges", settings.tapToTurn) { on -> onChange { it.copy(tapToTurn = on) } }
             SwitchRow("Turn pages with volume buttons", settings.volumeKeys) { on -> onChange { it.copy(volumeKeys = on) } }
         }
+    }
+}
+
+/** Fonts the reader added from their phone, and a card to add another. */
+@Composable
+private fun UserFontRow(settings: ReaderSettings, onChange: ((ReaderSettings) -> ReaderSettings) -> Unit) {
+    val context = LocalContext.current
+    val app = context.applicationContext as FolioApp
+    val fonts by app.fonts.fonts.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
+    val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+        if (uri != null) scope.launch {
+            app.fonts.add(uri)
+                .onSuccess { f -> onChange { it.copy(customFont = f.fileName) } }
+                .onFailure { Toast.makeText(context, it.message ?: "Couldn't add that font.", Toast.LENGTH_LONG).show() }
+        }
+    }
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        fonts.forEach { font ->
+            val family = remember(font.fileName) {
+                app.fonts.file(font.fileName)
+                    ?.let { f -> runCatching { android.graphics.Typeface.createFromFile(f) }.getOrNull() }
+                    ?.let { FontFamily(androidx.compose.ui.text.font.Typeface(it)) }
+                    ?: FontFamily.Serif
+            }
+            FontCard(
+                label = font.label,
+                family = family,
+                selected = settings.customFont == font.fileName,
+                onClick = { onChange { it.copy(customFont = font.fileName) } },
+                modifier = Modifier.width(84.dp),
+            )
+        }
+        Surface(
+            onClick = { pick.launch(UserFonts.MIME_TYPES) },
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            modifier = Modifier.width(84.dp),
+        ) {
+            Column(Modifier.padding(vertical = 12.dp, horizontal = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(32.dp))
+                Spacer(Modifier.height(2.dp))
+                Text("Add font", style = MaterialTheme.typography.labelSmall, maxLines = 1)
+            }
+        }
+    }
+    val chosen = fonts.firstOrNull { it.fileName == settings.customFont }
+    if (chosen != null) {
+        TextButton(onClick = {
+            onChange { it.copy(customFont = null) }
+            app.fonts.remove(chosen)
+        }) { Text("Remove “${chosen.label}”") }
     }
 }
 

@@ -157,6 +157,13 @@ data class Book(
     /** For a PDF's page view: the page the reader was on, and pages they bookmarked. */
     val pdfPage: Int = 0,
     val pdfMarks: List<Int> = emptyList(),
+    /** The series this book is part of, and its number in it (1, 2, 2.5…). */
+    val series: String? = null,
+    val seriesIndex: Float? = null,
+    /** The reader's own rating, 1..5 stars; 0 = not rated. */
+    val rating: Int = 0,
+    /** When the book was finished; 0 if it hasn't been. */
+    val finishedAt: Long = 0L,
 ) {
     val isAudio: Boolean get() = audio != null
 
@@ -183,6 +190,10 @@ data class Book(
         .put("pdfPages", pdfPages)
         .put("pdfPage", pdfPage)
         .put("pdfMarks", JSONArray(pdfMarks))
+        .put("series", series ?: JSONObject.NULL)
+        .put("seriesIndex", seriesIndex?.toDouble() ?: JSONObject.NULL)
+        .put("rating", rating)
+        .put("finishedAt", finishedAt)
 
     companion object {
         fun fromJson(o: JSONObject) = Book(
@@ -210,7 +221,16 @@ data class Book(
             pdfPages = o.optBoolean("pdfPages"),
             pdfPage = o.optInt("pdfPage"),
             pdfMarks = o.optJSONArray("pdfMarks")?.let { a -> List(a.length()) { a.getInt(it) } }.orEmpty(),
+            series = o.optString("series").takeIf { !o.isNull("series") && it.isNotBlank() },
+            seriesIndex = if (o.has("seriesIndex") && !o.isNull("seriesIndex")) o.optDouble("seriesIndex").toFloat() else null,
+            rating = o.optInt("rating").coerceIn(0, 5),
+            // Books finished before this was recorded count from when they were last opened.
+            finishedAt = o.optLong("finishedAt").takeIf { it > 0 }
+                ?: if (o.optDouble("progress", 0.0) >= FINISHED) o.optLong("lastOpenedAt") else 0L,
         )
+
+        /** Progress at which a book counts as finished. */
+        const val FINISHED = 0.995
     }
 }
 
@@ -333,6 +353,8 @@ class LibraryRepository(private val context: Context) {
                 fileName = file.name,
                 coverFileName = coverName,
                 addedAt = System.currentTimeMillis(),
+                series = epub.series,
+                seriesIndex = epub.seriesIndex,
             )
         }
     }
@@ -515,6 +537,10 @@ class LibraryRepository(private val context: Context) {
             pdfPage = place.pdfPage,
             pdfMarks = (mine.pdfMarks + theirs.pdfMarks).distinct().sorted(),
             scrollMode = mine.scrollMode ?: theirs.scrollMode,
+            series = mine.series ?: theirs.series,
+            seriesIndex = if (mine.series != null) mine.seriesIndex else theirs.seriesIndex,
+            rating = if (mine.rating > 0) mine.rating else theirs.rating,
+            finishedAt = if (mine.finishedAt > 0) mine.finishedAt else theirs.finishedAt,
             audio = mine.audio?.let { a ->
                 val t = theirs.audio
                 val placed = if (newer && t != null && t.track < a.tracks.size) a.copy(track = t.track, positionMs = t.positionMs, speed = t.speed) else a
@@ -596,10 +622,34 @@ class LibraryRepository(private val context: Context) {
     suspend fun setScrollMode(id: String, scroll: Boolean) = update(id) { it.copy(scrollMode = scroll) }
 
     suspend fun resetProgress(id: String) =
-        update(id) { it.copy(chapterIndex = 0, chapterOffset = 0f, progress = 0f, lastOpenedAt = 0L, audio = it.audio?.copy(track = 0, positionMs = 0)) }
+        update(id) { it.copy(chapterIndex = 0, chapterOffset = 0f, progress = 0f, lastOpenedAt = 0L, finishedAt = 0L, audio = it.audio?.copy(track = 0, positionMs = 0)) }
 
     private suspend fun update(id: String, transform: (Book) -> Book) = withContext(Dispatchers.IO) {
-        mutate { list -> list.map { if (it.id == id) transform(it) else it } }
+        mutate { list -> list.map { if (it.id == id) stampFinished(transform(it)) else it } }
+    }
+
+    /** Notes when a book is first finished (kept if it's read again; "Mark as unread" clears it). */
+    private fun stampFinished(after: Book): Book =
+        if (after.progress >= Book.FINISHED && after.finishedAt == 0L) after.copy(finishedAt = System.currentTimeMillis()) else after
+
+    /** Sets a book's series (and number in it) and star rating. */
+    suspend fun setSeriesAndRating(id: String, series: String?, seriesIndex: Float?, rating: Int) = update(id) {
+        val name = series?.trim()?.takeIf { s -> s.isNotEmpty() }
+        it.copy(series = name, seriesIndex = seriesIndex?.takeIf { name != null }, rating = rating.coerceIn(0, 5))
+    }
+
+    /**
+     * Fills in the series for EPUBs added before Folio read it from the book's own details.
+     * Runs once; the reader's own edits are left alone.
+     */
+    suspend fun fillSeriesFromBooks() = withContext(Dispatchers.IO) {
+        val found = _books.value.filter { !it.isAudio && !it.isPdf && it.series == null }.mapNotNull { b ->
+            runCatching { EpubBook(bookFile(b)).use { e -> e.series?.let { b.id to (it to e.seriesIndex) } } }.getOrNull()
+        }.toMap()
+        if (found.isEmpty()) return@withContext
+        mutate { list ->
+            list.map { b -> found[b.id]?.takeIf { b.series == null }?.let { (s, i) -> b.copy(series = s, seriesIndex = i) } ?: b }
+        }
     }
 
     private suspend fun mutate(transform: (List<Book>) -> List<Book>) = mutex.withLock {

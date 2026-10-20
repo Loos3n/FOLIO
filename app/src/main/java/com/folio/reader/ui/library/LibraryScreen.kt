@@ -126,6 +126,7 @@ fun LibraryScreen(
     val collections by vm.collections.collectAsStateWithLifecycle()
     var showStats by remember { mutableStateOf(false) }
     var showDisplay by remember { mutableStateOf(false) }
+    var showWords by remember { mutableStateOf(false) }
     var editingCollections by remember { mutableStateOf<Book?>(null) }
     var editingDetails by remember { mutableStateOf<Book?>(null) }
     val preparing by vm.preparing.collectAsStateWithLifecycle()
@@ -219,6 +220,7 @@ fun LibraryScreen(
                         onSort = vm::setSort,
                         onStats = { showStats = true },
                         onDisplay = { showDisplay = true },
+                        onWords = { showWords = true },
                         onFindFree = onFindFree,
                         onBackUp = backUp,
                         onRestore = restore,
@@ -313,7 +315,20 @@ fun LibraryScreen(
     if (showStats) {
         val stats by vm.stats.collectAsStateWithLifecycle()
         val goal by vm.goalMinutes.collectAsStateWithLifecycle()
-        StatsSheet(stats = stats, books = allBooks, goalMinutes = goal, onSetGoal = vm::setGoal, onDismiss = { showStats = false })
+        val yearGoal by vm.yearGoal.collectAsStateWithLifecycle()
+        StatsSheet(
+            stats = stats,
+            books = allBooks,
+            goalMinutes = goal,
+            onSetGoal = vm::setGoal,
+            yearGoal = yearGoal,
+            onSetYearGoal = vm::setYearGoal,
+            onDismiss = { showStats = false },
+        )
+    }
+    if (showWords) {
+        val words by vm.words.collectAsStateWithLifecycle()
+        WordListSheet(words = words, onRemove = vm::removeWord, onDismiss = { showWords = false })
     }
     editingCollections?.let { book ->
         CollectionsDialog(
@@ -331,8 +346,9 @@ fun LibraryScreen(
         EditDetailsDialog(
             book = book,
             cover = vm.coverFile(book),
-            onSave = { title, author, cover, removeCover ->
-                vm.editDetails(book, title, author, cover, removeCover)
+            seriesNames = vm.seriesNames.collectAsStateWithLifecycle().value,
+            onSave = { details ->
+                vm.editDetails(book, details)
                 editingDetails = null
             },
             onDismiss = { editingDetails = null },
@@ -371,6 +387,7 @@ private fun Header(
     onSort: (SortOrder) -> Unit,
     onStats: () -> Unit,
     onDisplay: () -> Unit,
+    onWords: () -> Unit,
     onFindFree: () -> Unit,
     onBackUp: () -> Unit,
     onRestore: () -> Unit,
@@ -421,6 +438,13 @@ private fun Header(
                     Icon(Icons.Filled.MoreVert, contentDescription = "More options", tint = MaterialTheme.colorScheme.primary)
                 }
                 DropdownMenu(expanded = moreOpen, onDismissRequest = { moreOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Word list") },
+                        onClick = {
+                            moreOpen = false
+                            onWords()
+                        },
+                    )
                     DropdownMenuItem(
                         text = { Text("Find free books") },
                         onClick = {
@@ -735,6 +759,16 @@ private fun BookTile(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
+                if (book.series != null) {
+                    Text(
+                        book.series + (book.seriesIndex?.let { " · " + seriesNumber(it) } ?: ""),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (book.rating > 0) Stars(book.rating, Modifier.padding(top = 2.dp))
             }
             // The same menu a long-press on the cover opens.
             Box {
@@ -758,7 +792,7 @@ private fun BookTile(
                             )
                         }
                         DropdownMenuItem(
-                            text = { Text("Edit details…") },
+                            text = { Text("Details and rating…") },
                             leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
                             onClick = {
                                 menuOpen = false

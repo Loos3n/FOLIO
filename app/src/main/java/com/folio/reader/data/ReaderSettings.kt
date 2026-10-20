@@ -53,6 +53,10 @@ data class ReaderSettings(
     val warmth: Float = 0f,
     /** Tapping near the left or right edge turns the page (otherwise only swipes do). */
     val tapToTurn: Boolean = false,
+    /** A font the reader added (its file name in the fonts folder), used instead of [font]; null = none. */
+    val customFont: String? = null,
+    /** Books to finish this year; 0 = no goal. */
+    val yearlyBookGoal: Int = 0,
 ) {
     fun resolvedTheme(systemDark: Boolean): ReaderTheme =
         theme ?: if (systemDark) ReaderTheme.Dark else ReaderTheme.Light
@@ -86,6 +90,8 @@ class SettingsRepository(context: Context) {
             .putFloat("brightness", next.brightness)
             .putFloat("warmth", next.warmth)
             .putBoolean("tapToTurn", next.tapToTurn)
+            .putString("customFont", next.customFont)
+            .putInt("yearlyBookGoal", next.yearlyBookGoal)
             .apply()
     }
 
@@ -139,6 +145,8 @@ class SettingsRepository(context: Context) {
             brightness = prefs.getFloat("brightness", d.brightness),
             warmth = prefs.getFloat("warmth", d.warmth),
             tapToTurn = prefs.getBoolean("tapToTurn", d.tapToTurn),
+            customFont = prefs.getString("customFont", null),
+            yearlyBookGoal = prefs.getInt("yearlyBookGoal", d.yearlyBookGoal),
         )
     }
 }

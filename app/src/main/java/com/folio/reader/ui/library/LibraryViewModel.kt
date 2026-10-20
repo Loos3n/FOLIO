@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.folio.reader.FolioApp
 import com.folio.reader.data.Backup
 import com.folio.reader.data.Book
+import com.folio.reader.data.SavedWord
 import com.folio.reader.data.StatsSnapshot
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,7 +25,9 @@ import kotlinx.coroutines.Dispatchers
 
 enum class Shelf(val label: String) { All("All"), Reading("Reading"), Unread("Not started"), Finished("Finished") }
 
-enum class SortOrder(val label: String) { Recent("Recently read"), Added("Recently added"), Title("Title"), Author("Author") }
+enum class SortOrder(val label: String) {
+    Recent("Recently read"), Added("Recently added"), Title("Title"), Author("Author"), Series("Series"), Rating("Rating"),
+}
 
 fun Book.isFinished() = progress >= 0.995f
 fun Book.isReading() = lastOpenedAt > 0 && !isFinished()
@@ -66,6 +69,22 @@ class LibraryViewModel(private val app: FolioApp) : ViewModel() {
     fun updateDisplay(transform: (ReaderSettings) -> ReaderSettings) = app.settings.update(transform)
 
     fun setGoal(minutes: Int) = app.settings.update { it.copy(dailyGoalMinutes = minutes) }
+
+    val yearGoal: StateFlow<Int> = app.settings.settings
+        .map { it.yearlyBookGoal }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, app.settings.settings.value.yearlyBookGoal)
+
+    fun setYearGoal(books: Int) = app.settings.update { it.copy(yearlyBookGoal = books) }
+
+    /** Words looked up with Define, newest first. */
+    val words: StateFlow<List<SavedWord>> = app.words.words
+
+    fun removeWord(word: SavedWord) = app.words.remove(word.id)
+
+    /** Every series name in use, for suggestions when editing a book. */
+    val seriesNames: StateFlow<List<String>> = library.books
+        .map { list -> list.mapNotNull { it.series }.distinct().sortedBy { it.lowercase() } }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     /** Every collection name in use, alphabetically. */
     val collections: StateFlow<List<String>> = library.books
@@ -116,7 +135,8 @@ class LibraryViewModel(private val app: FolioApp) : ViewModel() {
             }
             .filter {
                 needle.isEmpty() || it.title.contains(needle, ignoreCase = true) ||
-                    (it.author?.contains(needle, ignoreCase = true) == true)
+                    (it.author?.contains(needle, ignoreCase = true) == true) ||
+                    (it.series?.contains(needle, ignoreCase = true) == true)
             }
             .sortedWith(
                 when (order) {
@@ -124,6 +144,10 @@ class LibraryViewModel(private val app: FolioApp) : ViewModel() {
                     SortOrder.Added -> compareByDescending<Book> { it.addedAt }
                     SortOrder.Title -> compareBy<Book> { it.title.lowercase().removePrefix("the ").removePrefix("a ") }
                     SortOrder.Author -> compareBy<Book> { it.author?.lowercase() ?: "\uFFFF" }.thenBy { it.title.lowercase() }
+                    // Each series together and in order; books not in one follow, by title.
+                    SortOrder.Series -> compareBy<Book> { it.series?.lowercase() ?: "\uFFFF" }
+                        .thenBy { it.seriesIndex ?: Float.MAX_VALUE }.thenBy { it.title.lowercase() }
+                    SortOrder.Rating -> compareByDescending<Book> { it.rating }.thenByDescending { it.lastOpenedAt }
                 },
             )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
@@ -188,7 +212,7 @@ class LibraryViewModel(private val app: FolioApp) : ViewModel() {
         viewModelScope.launch { library.delete(book) }
     }
 
-    private val backup = Backup(app, library, app.settings, app.stats)
+    private val backup = Backup(app, library, app.settings, app.stats, app.words, app.fonts)
 
     init {
         viewModelScope.launch {
@@ -240,9 +264,10 @@ class LibraryViewModel(private val app: FolioApp) : ViewModel() {
         }
     }
 
-    fun editDetails(book: Book, title: String, author: String?, cover: Uri?, removeCover: Boolean) {
+    internal fun editDetails(book: Book, details: BookDetails) {
         viewModelScope.launch {
-            library.editDetails(book.id, title, author, cover, removeCover)
+            library.setSeriesAndRating(book.id, details.series, details.seriesIndex, details.rating)
+            library.editDetails(book.id, details.title, details.author, details.cover, details.removeCover)
                 .onFailure { _events.send(LibraryEvent.Message("Couldn't save. ${it.message ?: ""}".trim())) }
         }
     }

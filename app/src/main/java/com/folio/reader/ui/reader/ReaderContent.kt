@@ -9,6 +9,7 @@ import com.folio.reader.data.ReaderSettings
 import com.folio.reader.data.ReaderTheme
 import com.folio.reader.epub.EpubBook
 import java.io.ByteArrayInputStream
+import java.io.File
 import java.util.Locale
 
 /**
@@ -57,6 +58,7 @@ object ReaderContent {
         url: Uri,
         cssFor: () -> String,
         startFor: (path: String) -> ChapterStart,
+        userFont: (name: String) -> File? = { null },
     ): WebResourceResponse {
         val path = pathFor(url) ?: return blocked()
         if (path == INTERNAL + "reader.js") {
@@ -66,6 +68,10 @@ object ReaderContent {
             val name = path.substringAfterLast('/')
             val stream = runCatching { assets.open("fonts/$name") }.getOrNull() ?: return notFound()
             return WebResourceResponse("font/ttf", null, stream)
+        }
+        if (path.startsWith(INTERNAL + "myfonts/")) {
+            val file = userFont(path.substringAfterLast('/')) ?: return notFound()
+            return WebResourceResponse(if (file.extension.equals("otf", true)) "font/otf" else "font/ttf", null, file.inputStream())
         }
         val mediaType = book.mediaTypeFor(path)
         val isDocument = mediaType == "application/xhtml+xml" || mediaType == "text/html"
@@ -233,7 +239,11 @@ object ReaderContent {
             // so the justify setting applies both ways without flattening title pages.
             if (settings.justify) append(".folio-p{text-align:justify !important;text-align-last:start;}")
             else append(".folio-p{text-align:start !important;}")
-            settings.font.css?.let { family ->
+            val own = settings.customFont
+            if (own != null) {
+                append("@font-face{font-family:'Folio Own';src:url('$ORIGIN${INTERNAL}myfonts/${Uri.encode(own)}');}")
+                append("body,body *:not(pre):not(code):not(kbd):not(samp){font-family:'Folio Own',serif !important;}")
+            } else settings.font.css?.let { family ->
                 append("body,body *:not(pre):not(code):not(kbd):not(samp){font-family:$family !important;}")
             }
         }
@@ -981,7 +991,14 @@ object ReaderContent {
               var s = offsetOf(r.startContainer, r.startOffset), e = offsetOf(r.endContainer, r.endOffset);
               var text = String(sel).replace(/\s+/g, ' ').trim();
               if (e <= s || !text) return null;
-              return { s: s, e: e, text: text.length > 1000 ? text.slice(0, 1000) + '\u2026' : text };
+              // The sentence around it, for the word list.
+              var all = fullText(), a = s, b = e;
+              while (a > 0 && s - a < 300 && !/[.!?\u2026]/.test(all[a - 1])) a--;
+              while (b < all.length && b - e < 300 && !/[.!?\u2026]/.test(all[b])) b++;
+              if (b < all.length) b++;
+              while (b < all.length && /["'\u201d\u2019)]/.test(all[b])) b++;
+              var ctx = all.slice(a, b).replace(/\s+/g, ' ').replace(/^["'\u201d\u2019)\s]+/, '').trim();
+              return { s: s, e: e, text: text.length > 1000 ? text.slice(0, 1000) + '\u2026' : text, ctx: ctx };
             },
             clearSelection: function () {
               var sel = window.getSelection();

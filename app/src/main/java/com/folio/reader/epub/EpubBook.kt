@@ -39,6 +39,9 @@ class EpubBook(file: File) : Closeable {
     val author: String?
     /** BCP 47 language tag from the package metadata, e.g. "en"; used for hyphenation. */
     val language: String?
+    /** The series the book belongs to and its number in it, when the package says (Calibre or EPUB 3 style). */
+    val series: String?
+    val seriesIndex: Float?
     val manifest: Map<String, ManifestItem>
     val spine: List<ManifestItem>
     val toc: List<TocEntry>
@@ -58,6 +61,8 @@ class EpubBook(file: File) : Closeable {
             title = opf.title?.takeIf { it.isNotBlank() } ?: ""
             author = opf.author?.takeIf { it.isNotBlank() }
             language = opf.language?.takeIf { it.isNotBlank() }
+            series = opf.series?.takeIf { it.isNotBlank() }
+            seriesIndex = opf.seriesIndex?.takeIf { series != null }
             manifest = opf.manifest
             itemsByPath = manifest.values.associateBy { it.path }
             spine = opf.spineIds.mapNotNull { manifest[it] }
@@ -96,6 +101,8 @@ class EpubBook(file: File) : Closeable {
         val spineIds: List<String>,
         val ncxId: String?,
         val coverMetaId: String?,
+        val series: String?,
+        val seriesIndex: Float?,
     )
 
     private fun newParser(input: InputStream): XmlPullParser {
@@ -130,6 +137,11 @@ class EpubBook(file: File) : Closeable {
         var language: String? = null
         var ncxId: String? = null
         var coverMetaId: String? = null
+        var series: String? = null
+        var seriesIndex: Float? = null
+        // EPUB 3: <meta property="belongs-to-collection" id="c">Name</meta> refined by group-position.
+        var collectionId: String? = null
+        val positions = HashMap<String, Float>()
         val manifest = LinkedHashMap<String, ManifestItem>()
         val spine = ArrayList<String>()
         stream.use {
@@ -140,8 +152,21 @@ class EpubBook(file: File) : Closeable {
                     "title" -> if (title == null) title = p.nextText().trim()
                     "creator" -> if (author == null) author = p.nextText().trim()
                     "language" -> if (language == null) language = p.nextText().trim()
-                    "meta" -> if (p.getAttributeValue(null, "name") == "cover") {
-                        coverMetaId = p.getAttributeValue(null, "content")
+                    "meta" -> when (p.getAttributeValue(null, "name")) {
+                        "cover" -> coverMetaId = p.getAttributeValue(null, "content")
+                        "calibre:series" -> series = p.getAttributeValue(null, "content")?.trim()
+                        "calibre:series_index" -> seriesIndex = p.getAttributeValue(null, "content")?.trim()?.toFloatOrNull()
+                        else -> when (p.getAttributeValue(null, "property")) {
+                            "belongs-to-collection" -> if (series == null) {
+                                collectionId = p.getAttributeValue(null, "id")
+                                series = runCatching { p.nextText().trim() }.getOrNull()
+                            }
+                            "group-position" -> {
+                                val refines = p.getAttributeValue(null, "refines")?.removePrefix("#")
+                                val at = runCatching { p.nextText().trim().toFloatOrNull() }.getOrNull()
+                                if (refines != null && at != null) positions[refines] = at
+                            }
+                        }
                     }
                     "item" -> {
                         val id = p.getAttributeValue(null, "id") ?: continue
@@ -159,7 +184,8 @@ class EpubBook(file: File) : Closeable {
                 }
             }
         }
-        return Opf(title, author, language, manifest, spine, ncxId, coverMetaId)
+        if (seriesIndex == null) seriesIndex = collectionId?.let { positions[it] }
+        return Opf(title, author, language, manifest, spine, ncxId, coverMetaId, series, seriesIndex)
     }
 
     private fun findCover(opf: Opf): String? {
