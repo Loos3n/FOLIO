@@ -324,40 +324,90 @@
     });
   }
 
-  /** Splits blocks into chapters: at the PDF's own sections, else at big headings, else every few pages. */
+  var CHAPTER_WORDS = /^(chapter|part|book|section|prologue|epilogue|introduction|preface|foreword|afterword|conclusion|appendix|acknowledg(e)?ments|notes|index|glossary|bibliography|about the author)\b/i;
+  var SMALL_WORDS = /^(a|an|and|as|at|but|by|for|in|of|on|or|the|to|vs?|with)$/;
+
+  /** A contents-list title: no dot leaders or page numbers, and not shouting in capitals. */
+  function cleanTitle(t) {
+    t = String(t || '').replace(/\s+/g, ' ').replace(/[\s.·…_]{2,}\d+\s*$/, '').replace(/\s+\d{1,4}$/, function (m) {
+      return /^(chapter|part|book|section|appendix)\b/i.test(t) ? m : '';
+    }).trim();
+    var letters = t.replace(/[^A-Za-z]/g, '');
+    if (letters.length >= 4 && letters === letters.toUpperCase()) {
+      t = t.toLowerCase().replace(/[a-z][a-z']*/g, function (w, i, all) {
+        var opens = i === 0 || /[:—–-]\s*$/.test(all.slice(0, i));
+        return !opens && SMALL_WORDS.test(w) ? w : w.charAt(0).toUpperCase() + w.slice(1);
+      });
+    }
+    if (t.length > 80) t = t.slice(0, 77).trim() + '…';
+    return t;
+  }
+
+  /** A heading that's only a label, like "Chapter 3" or "7", so the line after it is the real name. */
+  function labelOnly(t) {
+    return t.length < 24 && (/^(chapter|part|book)\s+[\w-]+\.?$/i.test(t) || /^[\divxlc]+\.?$/i.test(t) ||
+      /^(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)$/i.test(t));
+  }
+
+  /** Splits blocks into chapters: at the PDF's own sections, else at headings, else every few pages. */
   function chapters(blocks, body, pageCount) {
     var out = [];
     var cur = null;
     var hasBreaks = blocks.some(function (b) { return b.type === 'break'; });
-    var start = function (title, page) {
-      cur = { title: title, html: [], chars: 0, page: page };
+    var start = function (title, page, fromOutline) {
+      cur = { title: title, html: [], chars: 0, page: page, last: page, pictures: 0, outline: !!fromOutline, joinable: false };
       out.push(cur);
     };
     blocks.forEach(function (b) {
-      if (b.type === 'break') { start(b.title, b.page); return; }
+      if (b.type === 'break') { start(b.title, b.page, true); return; }
       if (!cur) start(null, b.page);
       if (!hasBreaks) {
-        var bigHeading = b.type === 'h' && b.size > body * 1.3 && b.text.length < 100;
-        if ((bigHeading && cur.chars > 1500) || (cur.chars > 60000 && b.type === 'p')) start(bigHeading ? b.text : null, b.page);
+        var big = b.type === 'h' && b.size > body * 1.3 && b.text.length < 100;
+        var named = b.type === 'h' && b.text.length < 100 && CHAPTER_WORDS.test(b.text);
+        if ((named && cur.chars > 0) || (big && cur.chars > 1500) || (cur.chars > 60000 && b.type === 'p')) start(null, b.page);
       }
+      cur.last = b.page;
       if (b.type === 'img') {
         var r = b.rect.map(function (v) { return Math.round(v * 10) / 10; });
         cur.html.push('<img data-pdf="' + b.page + ',' + r.join(',') + '"/>');
+        cur.pictures++;
         return;
       }
       if (b.type === 'h') {
-        if (!cur.title) cur.title = b.text;
+        // "Chapter 3" followed by its name makes one title: "Chapter 3: The Name".
+        if (cur.chars === 0 && cur.joinable && b.text.length < 100) cur.title += ': ' + b.text;
+        else if (!cur.title) cur.title = b.text;
+        cur.joinable = cur.chars === 0 && labelOnly(b.text);
         var level = b.size > body * 1.6 ? 'h1' : b.size > body * 1.3 ? 'h2' : 'h3';
         cur.html.push('<' + level + '>' + b.html + '</' + level + '>');
+        if (!hasBreaks) return; // headings don't count as text, so a run of them stays one title
       } else {
+        cur.joinable = false;
         cur.html.push(b.centred ? '<p class="c">' + b.html + '</p>' : '<p>' + b.html + '</p>');
       }
       cur.chars += b.text.length;
     });
     out = out.filter(function (c) { return c.html.length; });
+    // A page or two with hardly any text (a part title, a quote) joins the chapter after it.
+    if (!hasBreaks) {
+      for (var i = out.length - 2; i >= 0; i--) {
+        var c = out[i];
+        if (c.chars < 250 && !c.pictures) {
+          var next = out[i + 1];
+          next.html = c.html.concat(next.html);
+          next.page = c.page;
+          if (!next.title) next.title = c.title;
+          next.chars += c.chars;
+          out.splice(i, 1);
+        }
+      }
+    }
     out.forEach(function (c, i) {
-      if (!c.title) c.title = 'Section ' + (i + 1);
-      if (c.title.length > 80) c.title = c.title.slice(0, 77) + '…';
+      c.title = cleanTitle(c.title);
+      if (!c.title) {
+        var end = Math.max(c.page, c.last);
+        c.title = end > c.page ? 'Pages ' + (c.page + 1) + '–' + (end + 1) : 'Page ' + (c.page + 1);
+      }
     });
     return out;
   }
@@ -366,6 +416,13 @@
     var map = {};
     var outline = await doc.getOutline().catch(function () { return null; });
     if (!outline || !outline.length) return map;
+    // A contents list with one or two entries at the top (often just the book's own title)
+    // is more useful a level down.
+    if (outline.length < 3) {
+      var flat = [];
+      outline.forEach(function (o) { flat.push(o); (o.items || []).forEach(function (c) { flat.push(c); }); });
+      outline = flat;
+    }
     var found = 0;
     for (var i = 0; i < outline.length; i++) {
       var item = outline[i];
