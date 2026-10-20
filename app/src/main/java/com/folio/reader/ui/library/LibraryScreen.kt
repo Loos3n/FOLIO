@@ -42,6 +42,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import com.folio.reader.data.HighlightExport
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Check
@@ -631,6 +633,7 @@ private fun BookTile(
     modifier: Modifier = Modifier,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
+    val context = LocalContext.current
     Column(modifier) {
         Box {
             Box(
@@ -744,6 +747,16 @@ private fun BookTile(
                                 onEdit()
                             },
                         )
+                        if (book.highlights.isNotEmpty()) {
+                            DropdownMenuItem(
+                                text = { Text("Share highlights") },
+                                leadingIcon = { Icon(Icons.Filled.Share, contentDescription = null) },
+                                onClick = {
+                                    menuOpen = false
+                                    HighlightExport.share(context, book)
+                                },
+                            )
+                        }
                         DropdownMenuItem(
                             text = { Text("Collections…") },
                             leadingIcon = { Icon(LibraryIcons.Collection, contentDescription = null) },

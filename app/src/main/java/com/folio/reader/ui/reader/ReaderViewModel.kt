@@ -114,6 +114,9 @@ class ReaderViewModel(private val app: FolioApp, private val bookId: String) : V
         _state.update { it.copy(error = "Part of this book couldn't be shown safely, so it was closed.") }
     }
 
+    /** The book as saved in the library right now. */
+    fun book() = library.get(bookId)
+
     init {
         viewModelScope.launch {
             val entry = library.get(bookId)

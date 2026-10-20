@@ -137,6 +137,7 @@ import com.folio.reader.FolioApp
 import com.folio.reader.PageKeys
 import com.folio.reader.data.Bookmark
 import com.folio.reader.data.Highlight
+import com.folio.reader.data.HighlightExport
 import com.folio.reader.data.ReaderFont
 import com.folio.reader.data.ReaderSettings
 import com.folio.reader.data.ReaderTheme
@@ -704,6 +705,7 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
                     controlsVisible = false
                 },
                 onDeleteBookmark = vm::removeBookmark,
+                onShareHighlights = { vm.book()?.let { HighlightExport.share(context, it) } },
                 onOpenHighlight = { mark ->
                     vm.openHighlight(mark)
                     showToc = false
@@ -1288,6 +1290,7 @@ private fun TocSheet(
     onDeleteBookmark: (Bookmark) -> Unit,
     onOpenHighlight: (Highlight) -> Unit,
     onEditHighlight: (Highlight) -> Unit,
+    onShareHighlights: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState()) {
@@ -1350,7 +1353,7 @@ private fun TocSheet(
                 }
             }
             1 -> BookmarkList(bookmarks, onOpenBookmark, onDeleteBookmark)
-            else -> HighlightList(highlights, onOpenHighlight, onEditHighlight)
+            else -> HighlightList(highlights, onOpenHighlight, onEditHighlight, onShareAll = onShareHighlights)
         }
     }
 }

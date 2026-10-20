@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -260,6 +261,7 @@ internal fun HighlightList(
     highlights: List<Highlight>,
     onOpen: (Highlight) -> Unit,
     onEdit: (Highlight) -> Unit,
+    onShareAll: (() -> Unit)? = null,
 ) {
     if (highlights.isEmpty()) {
         Column(
@@ -282,6 +284,25 @@ internal fun HighlightList(
         return
     }
     LazyColumn(Modifier.padding(horizontal = 12.dp)) {
+        if (onShareAll != null) {
+            item(key = "share") {
+                Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    val notes = highlights.count { it.note.isNotBlank() }
+                    Text(
+                        (if (highlights.size == 1) "1 highlight" else "${highlights.size} highlights") +
+                            if (notes > 0) " · $notes with notes" else "",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = onShareAll) {
+                        Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Share all")
+                    }
+                }
+            }
+        }
         items(highlights, key = { it.id }) { mark ->
             Surface(
                 onClick = { onOpen(mark) },
