@@ -1,5 +1,8 @@
 package com.folio.reader.ui.library
 
+import androidx.compose.material.icons.filled.Search
+import com.folio.reader.ui.common.MessageView
+import com.folio.reader.ui.common.LoadingView
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Log
@@ -274,24 +277,19 @@ fun FreeBooksScreen(vm: FreeBooksViewModel, onBack: () -> Unit, onOpen: (String)
         }
         Box(Modifier.fillMaxSize()) {
             when {
-                state.loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
-                state.error -> Column(
-                    Modifier.align(Alignment.Center).padding(32.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Text(
-                        "Couldn't reach Project Gutenberg. Check you're online and try again.",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    OutlinedButton(onClick = { vm.reload() }) { Text("Try again") }
-                }
-                state.books.isEmpty() -> Text(
-                    if (query.isBlank()) "Nothing here yet." else "No free books match “${query.trim()}”.",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.align(Alignment.Center).padding(32.dp),
+                state.loading -> LoadingView(Modifier.align(Alignment.Center))
+                state.error -> MessageView(
+                    "Can't reach Project Gutenberg",
+                    "Check you're online, then try again.",
+                    Modifier.align(Alignment.Center),
+                    action = "Try again",
+                    onAction = { vm.reload() },
+                )
+                state.books.isEmpty() -> MessageView(
+                    if (query.isBlank()) "Nothing here yet" else "No matches",
+                    if (query.isBlank()) "Try another topic." else "No free books match “${query.trim()}”. Try a shorter search or another spelling.",
+                    Modifier.align(Alignment.Center),
+                    icon = Icons.Filled.Search,
                 )
                 else -> LazyColumn(
                     state = listState,

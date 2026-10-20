@@ -1,5 +1,6 @@
 package com.folio.reader.ui.listen
 
+import com.folio.reader.ui.common.InlineMessage
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.lazy.items
@@ -345,9 +346,7 @@ fun ListenScreen(bookId: String, onBack: () -> Unit) {
             }
             if (state.error != null && loaded) {
                 Spacer(Modifier.height(16.dp))
-                Surface(color = scheme.errorContainer, contentColor = scheme.onErrorContainer, shape = RoundedCornerShape(16.dp)) {
-                    Text(state.error, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(16.dp))
-                }
+                InlineMessage(state.error, action = "Try again", onAction = { player.play() })
             }
             Spacer(Modifier.height(24.dp))
         }

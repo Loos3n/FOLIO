@@ -1,5 +1,6 @@
 package com.folio.reader.ui.reader
 
+import com.folio.reader.ui.common.LoadingView
 import android.graphics.Bitmap
 import android.os.SystemClock
 import android.util.LruCache
@@ -335,7 +336,7 @@ fun PdfReaderScreen(bookId: String, onBack: () -> Unit, onOpenText: () -> Unit) 
             when {
                 state.error != null -> ErrorView(state.error!!, onBack, Modifier.align(Alignment.Center))
                 state.converting != null -> Converting(state.converting!!, Modifier.align(Alignment.Center))
-                state.loading || state.openText -> CircularProgressIndicator(Modifier.align(Alignment.Center))
+                state.loading || state.openText -> LoadingView(Modifier.align(Alignment.Center))
                 else -> PdfPages(
                     vm = vm,
                     state = state,
@@ -644,32 +645,13 @@ private fun PdfPage(
 @Composable
 private fun Converting(progress: Pair<Int, Int>, modifier: Modifier = Modifier) {
     val (done, total) = progress
-    Column(
-        modifier
-            .padding(32.dp)
-            .fillMaxWidth(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(
-            "Getting this PDF ready to read",
-            style = MaterialTheme.typography.titleLarge,
-            color = MaterialTheme.colorScheme.onSurface,
-            textAlign = TextAlign.Center,
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            "Folio is laying out its text like an e-book, so it fits your screen and settings. This happens once.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-        )
-        Spacer(Modifier.height(24.dp))
-        if (total > 0) {
-            LinearProgressIndicator(progress = { done.toFloat() / total }, modifier = Modifier.fillMaxWidth())
-            Spacer(Modifier.height(8.dp))
-            Text("Page $done of $total", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        } else {
-            LinearProgressIndicator(Modifier.fillMaxWidth())
-        }
-    }
+    LoadingView(
+        modifier.fillMaxWidth(),
+        title = "Getting this PDF ready to read",
+        detail = "Folio is laying out its text like an e-book, so it fits your screen and settings. " +
+            "This happens once, and you can leave this screen while it works.",
+        progress = if (total > 0) done.toFloat() / total else null,
+        progressLabel = if (total > 0) "Page $done of $total" else "Starting…",
+        indeterminateBar = total == 0,
+    )
 }

@@ -2,6 +2,8 @@
 
 package com.folio.reader.ui.reader
 
+import com.folio.reader.ui.common.MessageView
+import com.folio.reader.ui.common.LoadingView
 import android.annotation.SuppressLint
 import com.folio.reader.audio.SpeechPlayer
 import android.os.PowerManager
@@ -470,7 +472,7 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
         ) {
             when {
                 state.error != null -> ErrorView(state.error!!, onBack, Modifier.align(Alignment.Center))
-                state.loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
+                state.loading -> LoadingView(Modifier.align(Alignment.Center))
                 else -> BookWebView(
                     vm = vm,
                     request = request,
@@ -1634,13 +1636,7 @@ private fun ThemeSwatch(label: String, theme: ReaderTheme?, selected: Boolean, o
 
 @Composable
 internal fun ErrorView(message: String, onBack: () -> Unit, modifier: Modifier = Modifier) {
-    Column(modifier.padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Text("Couldn't open this book", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurface, textAlign = TextAlign.Center)
-        Spacer(Modifier.height(8.dp))
-        Text(message, textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.height(24.dp))
-        Button(onClick = onBack) { Text("Back to library") }
-    }
+    MessageView("Couldn't open this book", message, modifier, action = "Back to library", onAction = onBack)
 }
 
 /** Immersive reading: hide the system bars with the controls, and match their icon colour to the page. */
