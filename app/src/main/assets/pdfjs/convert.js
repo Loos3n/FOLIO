@@ -97,30 +97,67 @@
     var inPage = function (b) {
       return [Math.max(b[0], view[0]), Math.max(b[1], view[1]), Math.min(b[2], view[2]), Math.min(b[3], view[3])];
     };
-    var textIn = function (r) {
-      var n = 0;
-      lines.forEach(function (l) {
-        var cx = (l.x0 + l.x1) / 2;
-        if (cx > r[0] - 2 && cx < r[2] + 2 && l.y > r[1] - 2 && l.y < r[3] + 2) n += l.chars;
+    // How much text lies over a box (counting only the part of each line inside it), and how
+    // many lines run through it and out the other side: body text, not a picture's labels.
+    var runsThrough = function (l, r) {
+      var w = Math.max(1, l.x1 - l.x0);
+      var out = Math.max(0, r[0] - l.x0) + Math.max(0, l.x1 - r[2]);
+      return out > Math.max(20, w * 0.15) && l.chars >= 15;
+    };
+    var overlapping = function (r) {
+      return lines.filter(function (l) {
+        var mid = l.y + l.size * 0.3; // the middle of the letters, above the baseline
+        return mid >= r[1] && mid <= r[3] && Math.min(l.x1, r[2] + 2) - Math.max(l.x0, r[0] - 2) > 0;
       });
-      return n;
+    };
+    /**
+     * The box with body text trimmed off its top and bottom edges (a drawing's frame often
+     * reaches into the paragraph next to it), or null when body text runs through the
+     * middle of it, so it isn't a picture at all, or it has too much text over it.
+     */
+    var trimmed = function (b, maxChars) {
+      var r = b.slice();
+      for (var pass = 0; pass < 20; pass++) {
+        var cut = false;
+        var h = r[3] - r[1];
+        overlapping(r).forEach(function (l) {
+          if (cut || !runsThrough(l, r)) return;
+          var mid = l.y + l.size * 0.3;
+          if (mid < r[1] + h * 0.35) { r[1] = l.y + l.size * 0.95; cut = true; }
+          else if (mid > r[3] - h * 0.35) { r[3] = l.y - l.size * 0.3; cut = true; }
+        });
+        if (!cut) break;
+      }
+      var w = r[2] - r[0], h2 = r[3] - r[1];
+      if (w < 40 || h2 < 30) return null;
+      if (h2 > w * 4 || w > h2 * 12) return null; // a sliver, not a figure
+      var chars = 0;
+      var over = overlapping(r);
+      for (var i = 0; i < over.length; i++) {
+        var l = over[i];
+        if (runsThrough(l, r)) return null;
+        var inside = Math.min(l.x1, r[2]) - Math.max(l.x0, r[0]);
+        chars += l.chars * Math.min(1, Math.max(0, inside) / Math.max(1, l.x1 - l.x0));
+      }
+      return chars <= maxChars ? r : null;
     };
     var found = [];
     images.map(inPage).forEach(function (b) {
       var w = b[2] - b[0], h = b[3] - b[1];
       if (w < 40 || h < 30) return; // ornaments, bullets, rules
-      if (textIn(b) > 300) return; // a page photo with text laid over it (a scan's text layer)
-      found.push(b);
+      // Not a page picture with text laid over it (a scan's text layer, a background).
+      var t = trimmed(b, 300);
+      if (t) found.push(t);
     });
     cluster(shapes.map(inPage).filter(function (b) { return b[2] > b[0] || b[3] > b[1]; }), 6).forEach(function (g) {
       var b = g.r, w = b[2] - b[0], h = b[3] - b[1];
       if (g.n < 3 || w < 60 || h < 40) return; // lines under headings, boxes, single frames
       if (w * h > pageW * pageH * 0.85) return; // a page background
-      if (textIn(b) > 200) return; // a box around text (a sidebar, a table of words)
-      found.push(b);
+      var t = trimmed(b, 200); // not a box around text (a sidebar, a table of words)
+      if (t) found.push(t);
     });
     // A picture inside another (an image within a drawn frame) counts once.
-    found = cluster(found, 2).map(function (g) { return g.r; });
+    found = cluster(found, 2).map(function (g) { return g.r; }).map(function (b) { return trimmed(b, 300); }).filter(Boolean);
     return found;
   }
 
@@ -238,7 +275,11 @@
       var placePictures = function (before) {
         while (pics.length && (before == null || pics[0].top < before)) {
           flush();
-          blocks.push({ type: 'img', page: pageIndex, rect: pics.shift().rect, text: '' });
+          var pic = pics.shift();
+          // How much of the text column the picture spans, so it's shown at the same share of the screen.
+          var column = left != null && right != null && right - left > 50 ? right - left : p.width;
+          var share = Math.round(Math.min(100, ((pic.rect[2] - pic.rect[0]) / column) * 100));
+          blocks.push({ type: 'img', page: pageIndex, rect: pic.rect, width: share >= 70 ? 100 : Math.max(25, share), text: '' });
           prev = null;
         }
       };
@@ -369,7 +410,7 @@
       cur.last = b.page;
       if (b.type === 'img') {
         var r = b.rect.map(function (v) { return Math.round(v * 10) / 10; });
-        cur.html.push('<img data-pdf="' + b.page + ',' + r.join(',') + '"/>');
+        cur.html.push('<img data-pdf="' + b.page + ',' + r.join(',') + ',' + (b.width || 100) + '"/>');
         cur.pictures++;
         return;
       }

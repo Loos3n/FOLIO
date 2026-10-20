@@ -195,7 +195,7 @@ object PdfTextConverter {
 object PdfEpubWriter {
     private val CONTROL = Regex("[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\uFFFE\\uFFFF]")
 
-    private val PICTURE = Regex("<img data-pdf=\"(\\d+),(-?[\\d.]+),(-?[\\d.]+),(-?[\\d.]+),(-?[\\d.]+)\"/>")
+    private val PICTURE = Regex("<img data-pdf=\"(\\d+),(-?[\\d.]+),(-?[\\d.]+),(-?[\\d.]+),(-?[\\d.]+)(?:,(\\d+))?\"/>")
 
     /**
      * [figure] draws a picture from the PDF (page, left, top, right, bottom in points); a
@@ -244,13 +244,14 @@ object PdfEpubWriter {
             chapters.forEachIndexed { i, c ->
                 val html = PICTURE.replace(CONTROL.replace(c.html, "")) { m ->
                     val (pg, l, t, r, b) = m.destructured
+                    val width = m.groupValues[6].toIntOrNull()?.coerceIn(25, 100) ?: 100
                     val bitmap = runCatching { figure(pg.toInt(), l.toFloat(), t.toFloat(), r.toFloat(), b.toFloat()) }.getOrNull()
                         ?: return@replace ""
                     val name = "img/f${pictures.size}.jpg"
                     put("OEBPS/$name", ByteArrayOutputStream().also { out -> bitmap.compress(Bitmap.CompressFormat.JPEG, 85, out) }.toByteArray())
                     bitmap.recycle()
                     pictures += name
-                    "<img class=\"pdf\" src=\"$name\" alt=\"\"/>"
+                    "<img class=\"pdf\" src=\"$name\" alt=\"\" style=\"width:$width%\"/>"
                 }
                 put("OEBPS/c$i.xhtml", page(c.title, html))
             }
@@ -299,5 +300,5 @@ object PdfEpubWriter {
         "h1,h2,h3{text-align:center;line-height:1.25;}" +
         "h1{font-size:1.6em;margin:1.5em 0 1em;}h2{font-size:1.3em;margin:1.3em 0 0.8em;}h3{font-size:1.05em;margin:1.2em 0 0.6em;}" +
         "sup{font-size:0.7em;line-height:0;}" +
-        "img.pdf{display:block;max-width:100%;height:auto;margin:1em auto;}"
+        "img.pdf{display:block;max-width:100%;height:auto;max-height:90vh;object-fit:contain;margin:1em auto;border-radius:4px;}"
 }

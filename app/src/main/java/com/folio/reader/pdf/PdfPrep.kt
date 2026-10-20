@@ -22,8 +22,11 @@ import kotlinx.coroutines.withContext
  */
 class PdfPrep(private val app: FolioApp) {
     companion object {
-        /** Bumped when the conversion improves; text made by an older one is redone. 2: pictures, tidier contents. */
-        const val VERSION = 2
+        /**
+         * Bumped when the conversion improves; text made by an older one is redone.
+         * 2: pictures, tidier contents. 3: no text mistaken for pictures; pictures sized to the column.
+         */
+        const val VERSION = 3
     }
 
     sealed interface Outcome {
