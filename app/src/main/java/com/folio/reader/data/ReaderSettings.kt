@@ -47,6 +47,10 @@ data class ReaderSettings(
     val charsPerMinute: Float = 0f,
     /** Minutes of reading (or listening) to aim for each day; 0 = no goal. */
     val dailyGoalMinutes: Int = 0,
+    /** Screen brightness while reading, 0..1; below 0 follows the phone. */
+    val brightness: Float = -1f,
+    /** Warm (amber) tint over the page, 0 = off .. 1 = strongest. */
+    val warmth: Float = 0f,
 ) {
     fun resolvedTheme(systemDark: Boolean): ReaderTheme =
         theme ?: if (systemDark) ReaderTheme.Dark else ReaderTheme.Light
@@ -77,6 +81,8 @@ class SettingsRepository(context: Context) {
             .putFloat("autoScrollSpeed", next.autoScrollSpeed)
             .putFloat("charsPerMinute", next.charsPerMinute)
             .putInt("dailyGoalMinutes", next.dailyGoalMinutes)
+            .putFloat("brightness", next.brightness)
+            .putFloat("warmth", next.warmth)
             .apply()
     }
 
@@ -127,6 +133,8 @@ class SettingsRepository(context: Context) {
             autoScrollSpeed = prefs.getFloat("autoScrollSpeed", d.autoScrollSpeed),
             charsPerMinute = prefs.getFloat("charsPerMinute", d.charsPerMinute),
             dailyGoalMinutes = prefs.getInt("dailyGoalMinutes", d.dailyGoalMinutes),
+            brightness = prefs.getFloat("brightness", d.brightness),
+            warmth = prefs.getFloat("warmth", d.warmth),
         )
     }
 }

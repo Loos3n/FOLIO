@@ -35,6 +35,17 @@ internal object ReaderIcons {
     /** keyboard_double_arrow_down. */
     val AutoScroll = icon("AutoScroll", "M18,6.41L16.59,5L12,9.58L7.41,5L6,6.41l6,6zM18,13l-1.41,-1.41L12,16.17l-4.59,-4.58L6,13l6,6z")
 
+    val Brightness = icon(
+        "Brightness",
+        "M20,8.69V4h-4.69L12,0.69 8.69,4H4v4.69L0.69,12 4,15.31V20h4.69L12,23.31 15.31,20H20v-4.69L23.31,12 20,8.69z" +
+            "M12,18c-3.31,0 -6,-2.69 -6,-6s2.69,-6 6,-6 6,2.69 6,6 -2.69,6 -6,6zM12,8c-2.21,0 -4,1.79 -4,4s1.79,4 4,4 4,-1.79 4,-4 -1.79,-4 -4,-4z",
+    )
+    val Warmth = icon(
+        "Warmth",
+        "M12,3c-4.97,0 -9,4.03 -9,9s4.03,9 9,9 9,-4.03 9,-9c0,-0.46 -0.04,-0.92 -0.1,-1.36 -0.98,1.37 -2.58,2.26 -4.4,2.26 " +
+            "-2.98,0 -5.4,-2.42 -5.4,-5.4 0,-1.81 0.89,-3.42 2.26,-4.4C12.92,3.04 12.46,3 12,3z",
+    )
+
     private fun icon(name: String, path: String): ImageVector =
         ImageVector.Builder(name, 24.dp, 24.dp, 24f, 24f)
             .addPath(PathParser().parsePathString(path).toNodes(), fill = SolidColor(Color.Black))

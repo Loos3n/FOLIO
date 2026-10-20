@@ -345,6 +345,7 @@ fun PdfReaderScreen(bookId: String, onBack: () -> Unit, onOpenText: () -> Unit) 
                     onTap = { controlsVisible = !controlsVisible },
                 )
             }
+            ReadingLight(settings)
 
             AnimatedVisibility(
                 visible = (controlsVisible || state.converting != null) && state.error == null,

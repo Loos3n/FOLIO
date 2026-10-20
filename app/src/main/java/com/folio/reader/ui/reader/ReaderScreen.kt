@@ -77,6 +77,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -498,6 +499,7 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
                         .padding(top = 30.dp, bottom = 30.dp),
                 )
             }
+            ReadingLight(settings)
 
             // Reading ruler (scrolling mode): a clear band to read in, with the text above and
             // below it softly dimmed. It takes no touches, so the page scrolls underneath.
@@ -1458,6 +1460,41 @@ private fun SettingsSheet(
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Text("Display", style = MaterialTheme.typography.headlineSmall)
+
+            SectionLabel("Light")
+            val followPhone = settings.brightness < 0f
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(ReaderIcons.Brightness, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.width(12.dp))
+                Slider(
+                    value = if (followPhone) 0.5f else settings.brightness,
+                    onValueChange = { v -> onChange { it.copy(brightness = v) } },
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(8.dp))
+                FilterChip(
+                    selected = followPhone,
+                    onClick = { onChange { it.copy(brightness = if (followPhone) 0.5f else -1f) } },
+                    label = { Text("Auto") },
+                )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(ReaderIcons.Warmth, contentDescription = null, tint = Color(0xFFE08A3C))
+                Spacer(Modifier.width(12.dp))
+                Slider(
+                    value = settings.warmth,
+                    onValueChange = { v -> onChange { it.copy(warmth = if (v < 0.04f) 0f else v) } },
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    if (settings.warmth <= 0f) "Off" else "Warm",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.width(48.dp),
+                    textAlign = TextAlign.Center,
+                )
+            }
 
             SectionLabel("Layout")
             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
