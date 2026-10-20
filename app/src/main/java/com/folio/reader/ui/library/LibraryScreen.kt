@@ -395,43 +395,21 @@ private fun Header(
     var menuOpen by remember { mutableStateOf(false) }
     var moreOpen by remember { mutableStateOf(false) }
     Column {
-        Row(verticalAlignment = Alignment.Bottom) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    greeting(),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-                Text("Your library", style = MaterialTheme.typography.displaySmall)
-                Text(
-                    if (count == 1) "1 book" else "$count books",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+        // Greeting and actions on one line, so the title below gets the full width.
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                greeting(),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
             IconButton(onClick = onDisplay) {
                 Icon(ReaderIcons.Brightness, contentDescription = "Display and light", tint = MaterialTheme.colorScheme.primary)
             }
             IconButton(onClick = onStats) {
                 Icon(LibraryIcons.Stats, contentDescription = "Reading stats", tint = MaterialTheme.colorScheme.primary)
-            }
-            Box {
-                TextButton(onClick = { menuOpen = true }) { Text(sort.label) }
-                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                    SortOrder.entries.forEach { option ->
-                        DropdownMenuItem(
-                            text = { Text(option.label) },
-                            leadingIcon = {
-                                if (option == sort) Icon(Icons.Filled.Check, contentDescription = null)
-                                else Spacer(Modifier.size(24.dp))
-                            },
-                            onClick = {
-                                onSort(option)
-                                menuOpen = false
-                            },
-                        )
-                    }
-                }
             }
             Box {
                 IconButton(onClick = { moreOpen = true }) {
@@ -468,6 +446,33 @@ private fun Header(
                             onRestore()
                         },
                     )
+                }
+            }
+        }
+        Text("Your library", style = MaterialTheme.typography.displaySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                if (count == 1) "1 book" else "$count books",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            Box {
+                TextButton(onClick = { menuOpen = true }) { Text(sort.label) }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    SortOrder.entries.forEach { option ->
+                        DropdownMenuItem(
+                            text = { Text(option.label) },
+                            leadingIcon = {
+                                if (option == sort) Icon(Icons.Filled.Check, contentDescription = null)
+                                else Spacer(Modifier.size(24.dp))
+                            },
+                            onClick = {
+                                onSort(option)
+                                menuOpen = false
+                            },
+                        )
+                    }
                 }
             }
         }
