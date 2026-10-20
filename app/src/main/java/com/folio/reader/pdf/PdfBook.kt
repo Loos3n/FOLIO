@@ -91,6 +91,20 @@ class PdfBook private constructor(private val fd: ParcelFileDescriptor, private 
     companion object {
         private const val MAX_SIDE = 4096
 
+        /** Whether [bitmap] is (nearly) one flat colour: an empty area, not a picture. */
+        fun isBlank(bitmap: Bitmap): Boolean {
+            val steps = 48
+            val lum = IntArray(steps * steps)
+            for (y in 0 until steps) for (x in 0 until steps) {
+                val c = bitmap.getPixel(x * (bitmap.width - 1) / (steps - 1), y * (bitmap.height - 1) / (steps - 1))
+                lum[y * steps + x] = (Color.red(c) * 3 + Color.green(c) * 6 + Color.blue(c)) / 10
+            }
+            lum.sort()
+            val median = lum[lum.size / 2]
+            val different = lum.count { kotlin.math.abs(it - median) > 10 }
+            return different < lum.size / 100
+        }
+
         fun open(file: File): PdfBook {
             val fd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
             val renderer = try {

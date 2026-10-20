@@ -25,8 +25,9 @@ class PdfPrep(private val app: FolioApp) {
         /**
          * Bumped when the conversion improves; text made by an older one is redone.
          * 2: pictures, tidier contents. 3: no text mistaken for pictures; pictures sized to the column.
+         * 4: no blank pictures, and none in the middle of a paragraph.
          */
-        const val VERSION = 3
+        const val VERSION = 4
     }
 
     sealed interface Outcome {
@@ -89,7 +90,9 @@ class PdfPrep(private val app: FolioApp) {
                     val cover = runCatching { pdf.render(0, 900) }.getOrNull()
                     try {
                         PdfEpubWriter.write(text, entry.title, author, cover, target) { page, l, t, r, b ->
-                            pdf.renderRegion(page, l, t, r, b, 1200)
+                            pdf.renderRegion(page, l, t, r, b, 1200)?.let { bitmap ->
+                                if (PdfBook.isBlank(bitmap)) { bitmap.recycle(); null } else bitmap
+                            }
                         }
                     } finally {
                         cover?.recycle()

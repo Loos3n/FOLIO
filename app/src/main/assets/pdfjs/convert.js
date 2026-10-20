@@ -266,7 +266,13 @@
 
     var blocks = [];
     var para = null;
-    var flush = function () { if (para) { blocks.push(para); para = null; } };
+    // Pictures met in the middle of a paragraph (often one running over a page break) wait
+    // until it ends, so they never split a sentence.
+    var waiting = [];
+    var flush = function () {
+      if (para) { blocks.push(para); para = null; }
+      if (waiting.length) { blocks.push.apply(blocks, waiting); waiting = []; }
+    };
 
     pages.forEach(function (p, pageIndex) {
       if (outline[pageIndex]) { flush(); blocks.push({ type: 'break', title: outline[pageIndex], page: pageIndex }); }
@@ -274,13 +280,13 @@
       var pics = (p.pictures || []).slice().sort(function (a, b) { return a.top - b.top; });
       var placePictures = function (before) {
         while (pics.length && (before == null || pics[0].top < before)) {
-          flush();
           var pic = pics.shift();
           // How much of the text column the picture spans, so it's shown at the same share of the screen.
           var column = left != null && right != null && right - left > 50 ? right - left : p.width;
           var share = Math.round(Math.min(100, ((pic.rect[2] - pic.rect[0]) / column) * 100));
-          blocks.push({ type: 'img', page: pageIndex, rect: pic.rect, width: share >= 70 ? 100 : Math.max(25, share), text: '' });
-          prev = null;
+          var img = { type: 'img', page: pageIndex, rect: pic.rect, width: share >= 70 ? 100 : Math.max(25, share), text: '' };
+          if (para && para.type === 'p') waiting.push(img);
+          else { flush(); blocks.push(img); }
         }
       };
       p.lines.forEach(function (l) {
