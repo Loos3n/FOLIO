@@ -180,6 +180,11 @@ object ReaderContent {
             append("img,video,svg{max-width:100% !important;max-height:calc(100vh - 8px) !important;")
             append("object-fit:contain;break-inside:avoid;-webkit-column-break-inside:avoid;}")
             append("img,video{height:auto !important;}")
+            // On a dark page, pictures are toned down a little, and drawings with see-through
+            // backgrounds (black lines, labels) get a paper-coloured backing so they stay visible.
+            if (theme.isDark) {
+                append("body img,body svg{background-color:#EDE9E1 !important;border-radius:3px;filter:brightness(.88);}")
+            }
             append("h1,h2,h3,h4{break-after:avoid;-webkit-column-break-after:avoid;line-height:1.25 !important;")
             append("-webkit-hyphens:manual;hyphens:manual;text-wrap:balance;}")
             // Book headings get room to breathe and sit centred, like a printed chapter opening.

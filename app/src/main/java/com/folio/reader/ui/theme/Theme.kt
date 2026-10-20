@@ -2,6 +2,8 @@
 
 package com.folio.reader.ui.theme
 
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.material3.LocalContentColor
 import android.content.res.AssetManager
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
@@ -159,5 +161,9 @@ fun FolioTheme(
         val (display, text) = FolioFonts.get(assets)
         folioTypography(display, text)
     }
-    MaterialTheme(colorScheme = scheme, typography = typography, content = content)
+    MaterialTheme(colorScheme = scheme, typography = typography) {
+        // Text and icons drawn straight on a screen's background (not inside a Surface) would
+        // otherwise default to black, which disappears in dark mode.
+        CompositionLocalProvider(LocalContentColor provides scheme.onBackground, content = content)
+    }
 }
