@@ -51,6 +51,8 @@ data class ReaderSettings(
     val brightness: Float = -1f,
     /** Warm (amber) tint over the page, 0 = off .. 1 = strongest. */
     val warmth: Float = 0f,
+    /** Tapping near the left or right edge turns the page (otherwise only swipes do). */
+    val tapToTurn: Boolean = false,
 ) {
     fun resolvedTheme(systemDark: Boolean): ReaderTheme =
         theme ?: if (systemDark) ReaderTheme.Dark else ReaderTheme.Light
@@ -83,6 +85,7 @@ class SettingsRepository(context: Context) {
             .putInt("dailyGoalMinutes", next.dailyGoalMinutes)
             .putFloat("brightness", next.brightness)
             .putFloat("warmth", next.warmth)
+            .putBoolean("tapToTurn", next.tapToTurn)
             .apply()
     }
 
@@ -135,6 +138,7 @@ class SettingsRepository(context: Context) {
             dailyGoalMinutes = prefs.getInt("dailyGoalMinutes", d.dailyGoalMinutes),
             brightness = prefs.getFloat("brightness", d.brightness),
             warmth = prefs.getFloat("warmth", d.warmth),
+            tapToTurn = prefs.getBoolean("tapToTurn", d.tapToTurn),
         )
     }
 }

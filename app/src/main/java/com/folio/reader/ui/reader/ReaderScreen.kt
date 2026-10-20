@@ -2,6 +2,11 @@
 
 package com.folio.reader.ui.reader
 
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.animation.core.animateDpAsState
 import com.folio.reader.ui.common.MessageView
 import com.folio.reader.ui.common.LoadingView
 import android.annotation.SuppressLint
@@ -435,11 +440,13 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
         webView?.evaluateJavascript(if (forward) "window.folio && folio.next()" else "window.folio && folio.prev()", null)
     }
 
+    var bottomPanelHeight by remember { mutableIntStateOf(0) }
     val onTap: (Int) -> Unit = { zone ->
         when {
             controlsVisible -> controlsVisible = false
-            zone < 0 -> turn(false)
-            zone > 0 -> turn(true)
+            // Pages turn by swiping; tapping the edges too only when chosen in Display.
+            zone < 0 && settings.tapToTurn -> turn(false)
+            zone > 0 && settings.tapToTurn -> turn(true)
             else -> controlsVisible = true
         }
     }
@@ -583,14 +590,24 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
                 )
             }
 
+            // Always there while reading aloud, so pausing is one tap; it moves up above the
+            // controls when they're showing.
+            val barLift by animateDpAsState(
+                if (controlsVisible) with(LocalDensity.current) { bottomPanelHeight.toDp() } + 12.dp else 36.dp,
+                label = "readAloudBar",
+            )
             AnimatedVisibility(
-                visible = readAloud.active && !controlsVisible,
+                visible = readAloud.active,
                 enter = slideInVertically { it } + fadeIn(),
                 exit = slideOutVertically { it } + fadeOut(),
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .windowInsetsPadding(WindowInsets.systemBarsIgnoringVisibility.only(WindowInsetsSides.Bottom))
-                    .padding(bottom = 36.dp),
+                    .then(
+                        if (controlsVisible) Modifier
+                        else Modifier.windowInsetsPadding(WindowInsets.systemBarsIgnoringVisibility.only(WindowInsetsSides.Bottom)),
+                    )
+                    .padding(bottom = barLift)
+                    .zIndex(1f),
             ) {
                 val left = sleepEndsAt?.let { ((it - now) / 1000).coerceAtLeast(0) }
                 ReadAloudBar(
@@ -660,7 +677,9 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
                 visible = controlsVisible && !state.loading && state.error == null,
                 enter = slideInVertically { it } + fadeIn(),
                 exit = slideOutVertically { it } + fadeOut(),
-                modifier = Modifier.align(Alignment.BottomCenter),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .onSizeChanged { bottomPanelHeight = it.height },
             ) {
                 ReaderBottomPanel(
                     state = state,
@@ -1585,6 +1604,7 @@ private fun SettingsSheet(
 
             Spacer(Modifier.height(2.dp))
             SwitchRow("Justify text", settings.justify) { on -> onChange { it.copy(justify = on) } }
+            SwitchRow("Turn pages by tapping the edges", settings.tapToTurn) { on -> onChange { it.copy(tapToTurn = on) } }
             SwitchRow("Turn pages with volume buttons", settings.volumeKeys) { on -> onChange { it.copy(volumeKeys = on) } }
         }
     }
