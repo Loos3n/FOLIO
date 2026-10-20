@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.folio.reader.audio.AudioPlayer
+import com.folio.reader.data.AutoBackup
 import com.folio.reader.data.LibraryRepository
 import com.folio.reader.data.ReadingStats
 import com.folio.reader.data.SettingsRepository
@@ -37,6 +38,8 @@ class FolioApp : Application() {
         private set
     lateinit var fonts: UserFonts
         private set
+    lateinit var autoBackup: AutoBackup
+        private set
     /** Created on first use, on the main thread. */
     val audio: AudioPlayer by lazy { AudioPlayer(this) }
     val pdfPrep: PdfPrep by lazy { PdfPrep(this) }
@@ -51,6 +54,8 @@ class FolioApp : Application() {
         stats = ReadingStats(this, appScope)
         words = WordList(this, appScope)
         fonts = UserFonts(this)
+        autoBackup = AutoBackup(this)
+        autoBackup.schedule()
         watchForWidgetAndGoal()
         watchYearGoal()
         // Series named inside EPUBs added before Folio read them, once.

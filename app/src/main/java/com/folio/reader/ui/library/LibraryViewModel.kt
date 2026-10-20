@@ -7,6 +7,8 @@ import androidx.lifecycle.viewModelScope
 import com.folio.reader.FolioApp
 import com.folio.reader.data.Backup
 import com.folio.reader.data.Book
+import android.provider.OpenableColumns
+import com.folio.reader.data.AutoBackupState
 import com.folio.reader.data.SavedWord
 import com.folio.reader.data.StatsSnapshot
 import kotlinx.coroutines.channels.Channel
@@ -80,6 +82,21 @@ class LibraryViewModel(private val app: FolioApp) : ViewModel() {
     val words: StateFlow<List<SavedWord>> = app.words.words
 
     fun removeWord(word: SavedWord) = app.words.remove(word.id)
+
+    val autoBackup: StateFlow<AutoBackupState> = app.autoBackup.state
+
+    fun turnOnAutoBackup(uri: Uri) {
+        val name = runCatching {
+            app.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                if (c.moveToFirst()) c.getString(0) else null
+            }
+        }.getOrNull()
+        app.autoBackup.turnOn(uri, name)
+    }
+
+    fun turnOffAutoBackup() = app.autoBackup.turnOff()
+
+    fun autoBackupNow() = app.autoBackup.runNow()
 
     /** Every series name in use, for suggestions when editing a book. */
     val seriesNames: StateFlow<List<String>> = library.books
@@ -249,12 +266,16 @@ class LibraryViewModel(private val app: FolioApp) : ViewModel() {
             val c = summary.counts
             val parts = ArrayList<String>()
             parts += when {
-                c.added == 0 && c.merged == 0 -> "There were no books in that backup."
+                c.added == 0 && c.merged == 0 -> if (c.skipped == 0) "There were no books in that backup." else "None of its books could be restored yet."
                 c.merged == 0 -> if (c.added == 1) "Added 1 book with its place, highlights and notes." else "Added ${c.added} books with their places, highlights and notes."
                 c.added == 0 -> "All ${c.merged} books were already here; their places, highlights and notes are up to date."
                 else -> "Added ${c.added} and updated ${c.merged} already here, with places, highlights and notes."
             }
-            if (c.skipped > 0) parts += "${c.skipped} couldn't be restored because the backup was missing their files."
+            if (c.skipped > 0) parts += when {
+                summary.hadBookFiles -> "${c.skipped} couldn't be restored because the backup was missing their files."
+                c.skipped == 1 -> "1 book in the backup isn't on this phone. Add it with Add books, then restore again to bring back its place and notes."
+                else -> "${c.skipped} books in the backup aren't on this phone. Add them with Add books, then restore again to bring back their places and notes."
+            }
             if (summary.audioToReAdd.isNotEmpty()) {
                 val names = summary.audioToReAdd.joinToString { "“$it”" }
                 parts += "To keep listening to $names, add the audio files again with Add books. Your place is kept."

@@ -101,6 +101,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.folio.reader.data.AutoBackup
 import com.folio.reader.data.Backup
 import com.folio.reader.data.Book
 import java.util.Calendar
@@ -127,6 +128,10 @@ fun LibraryScreen(
     var showStats by remember { mutableStateOf(false) }
     var showDisplay by remember { mutableStateOf(false) }
     var showWords by remember { mutableStateOf(false) }
+    var showAutoBackup by remember { mutableStateOf(false) }
+    val autoBackupTarget = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(Backup.MIME)) { uri: Uri? ->
+        uri?.let(vm::turnOnAutoBackup)
+    }
     var editingCollections by remember { mutableStateOf<Book?>(null) }
     var editingDetails by remember { mutableStateOf<Book?>(null) }
     val preparing by vm.preparing.collectAsStateWithLifecycle()
@@ -221,6 +226,7 @@ fun LibraryScreen(
                         onStats = { showStats = true },
                         onDisplay = { showDisplay = true },
                         onWords = { showWords = true },
+                        onAutoBackup = { showAutoBackup = true },
                         onFindFree = onFindFree,
                         onBackUp = backUp,
                         onRestore = restore,
@@ -326,6 +332,16 @@ fun LibraryScreen(
             onDismiss = { showStats = false },
         )
     }
+    if (showAutoBackup) {
+        val state by vm.autoBackup.collectAsStateWithLifecycle()
+        AutoBackupDialog(
+            state = state,
+            onChoose = { autoBackupTarget.launch(AutoBackup.FILE_NAME) },
+            onNow = vm::autoBackupNow,
+            onOff = vm::turnOffAutoBackup,
+            onDismiss = { showAutoBackup = false },
+        )
+    }
     if (showWords) {
         val words by vm.words.collectAsStateWithLifecycle()
         WordListSheet(words = words, onRemove = vm::removeWord, onDismiss = { showWords = false })
@@ -388,6 +404,7 @@ private fun Header(
     onStats: () -> Unit,
     onDisplay: () -> Unit,
     onWords: () -> Unit,
+    onAutoBackup: () -> Unit,
     onFindFree: () -> Unit,
     onBackUp: () -> Unit,
     onRestore: () -> Unit,
@@ -436,6 +453,13 @@ private fun Header(
                         onClick = {
                             moreOpen = false
                             onBackUp()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Automatic backup…") },
+                        onClick = {
+                            moreOpen = false
+                            onAutoBackup()
                         },
                     )
                     DropdownMenuItem(

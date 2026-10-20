@@ -16,6 +16,8 @@ import java.util.zip.ZipOutputStream
 /** What a restore brought back, for the message afterwards. */
 data class RestoreSummary(
     val counts: RestoreCounts,
+    /** False for an automatic backup, which holds no book files. */
+    val hadBookFiles: Boolean,
     /** Audiobooks whose audio files aren't on this phone and need adding again. */
     val audioToReAdd: List<String>,
 )
@@ -44,8 +46,12 @@ class Backup(
         fun suggestedName() = "Folio backup ${LocalDate.now()}.zip"
     }
 
-    /** Writes the backup to [uri]. Returns how many books it holds. */
-    suspend fun write(uri: Uri): Int = withContext(Dispatchers.IO) {
+    /**
+     * Writes the backup to [uri], replacing what was there. Returns how many books it holds.
+     * Without [bookFiles] it keeps only places, highlights, notes and the rest: small enough
+     * to save every night, and restored onto books already on the phone.
+     */
+    suspend fun write(uri: Uri, bookFiles: Boolean = true): Int = withContext(Dispatchers.IO) {
         val books = library.books.value
         val index = JSONObject()
             .put("version", VERSION)
@@ -54,6 +60,7 @@ class Backup(
             .put("stats", stats.toJson())
             .put("settings", settings.toJson())
             .put("words", words.toJson())
+            .put("bookFiles", bookFiles)
         val out = runCatching { context.contentResolver.openOutputStream(uri, "wt") }.getOrNull()
             ?: context.contentResolver.openOutputStream(uri)
             ?: error("Couldn't write to that file.")
@@ -70,6 +77,7 @@ class Backup(
                 zip.closeEntry()
             }
             for (book in books) {
+                if (!bookFiles) break
                 if (!book.isAudio) add("books/${book.fileName}", library.bookFile(book))
                 book.coverFileName?.let { add("covers/$it", library.coverFile(book)) }
             }
@@ -114,7 +122,7 @@ class Backup(
             val missing = books.mapNotNull { b -> library.get(counts.ids[b.id] ?: b.id) }
                 .filter { it.isAudio && library.audioMissing(it) }
                 .map { it.title }
-            RestoreSummary(counts, missing)
+            RestoreSummary(counts, o.optBoolean("bookFiles", true), missing)
         } finally {
             dir.deleteRecursively()
         }

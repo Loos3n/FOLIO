@@ -77,6 +77,9 @@ import com.folio.reader.data.StatsSnapshot
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
+import com.folio.reader.data.AutoBackupState
 import java.time.format.TextStyle
 import java.util.Locale
 
@@ -655,4 +658,67 @@ private fun GoalDialog(current: Int, onPick: (Int) -> Unit, onDismiss: () -> Uni
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+}
+
+/** Turns the nightly backup on or off, and shows how the last one went. */
+@Composable
+internal fun AutoBackupDialog(
+    state: AutoBackupState,
+    onChoose: () -> Unit,
+    onNow: () -> Unit,
+    onOff: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val on = state.uri != null
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Automatic backup") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    "Once a day Folio saves your places, bookmarks, highlights, notes, word list, stats and settings to one file, " +
+                        "replacing the copy from before, so it never piles up. Pick Google Drive when choosing where to save " +
+                        "to keep it safe if you lose your phone.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    "The book files aren't included, which keeps it small. To restore on a new phone, add your books first, then use Restore from backup.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (on) {
+                    Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, shape = RoundedCornerShape(16.dp)) {
+                        Column(Modifier.fillMaxWidth().padding(14.dp)) {
+                            Text("Saving to ${state.place ?: "your chosen file"}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                            Text(
+                                state.lastError ?: if (state.lastSavedAt > 0) "Last saved ${savedWhen(state.lastSavedAt)}" else "Saving the first copy…",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (state.lastError != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    Row {
+                        TextButton(onClick = onNow) { Text("Back up now") }
+                        TextButton(onClick = onChoose) { Text("Change where") }
+                        TextButton(onClick = onOff) { Text("Turn off") }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (on) TextButton(onClick = onDismiss) { Text("Done") }
+            else TextButton(onClick = onChoose) { Text("Choose where to save") }
+        },
+        dismissButton = { if (!on) TextButton(onClick = onDismiss) { Text("Not now") } },
+    )
+}
+
+private fun savedWhen(at: Long): String {
+    val time = Instant.ofEpochMilli(at).atZone(ZoneId.systemDefault())
+    val clock = time.format(DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT))
+    return when (time.toLocalDate()) {
+        LocalDate.now() -> "today at $clock"
+        LocalDate.now().minusDays(1) -> "yesterday at $clock"
+        else -> time.format(DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT))
+    }
 }
