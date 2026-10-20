@@ -2,7 +2,9 @@ package com.folio.reader
 
 import android.app.Application
 import android.widget.Toast
+import com.folio.reader.pdf.PdfPrep
 import com.folio.reader.widget.ReadingWidget
+import kotlinx.coroutines.delay
 import java.time.LocalDate
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.combine
@@ -29,6 +31,7 @@ class FolioApp : Application() {
         private set
     /** Created on first use, on the main thread. */
     val audio: AudioPlayer by lazy { AudioPlayer(this) }
+    val pdfPrep: PdfPrep by lazy { PdfPrep(this) }
 
     /** For writes that must finish even after the screen that started them is gone. */
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -39,6 +42,11 @@ class FolioApp : Application() {
         settings = SettingsRepository(this)
         stats = ReadingStats(this, appScope)
         watchForWidgetAndGoal()
+        // PDFs added or restored but not yet ready, or made by an older conversion, once things settle.
+        appScope.launch {
+            delay(4_000)
+            pdfPrep.prepareAll()
+        }
     }
 
     /** Keeps the home-screen widget up to date, and says so when today's reading goal is met. */

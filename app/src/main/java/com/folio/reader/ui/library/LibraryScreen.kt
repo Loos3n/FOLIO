@@ -42,6 +42,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
@@ -122,6 +123,7 @@ fun LibraryScreen(
     var showStats by remember { mutableStateOf(false) }
     var editingCollections by remember { mutableStateOf<Book?>(null) }
     var editingDetails by remember { mutableStateOf<Book?>(null) }
+    val preparing by vm.preparing.collectAsStateWithLifecycle()
     val importing by vm.importing.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     var pendingDelete by remember { mutableStateOf<Book?>(null) }
@@ -254,6 +256,7 @@ fun LibraryScreen(
                         onDelete = { pendingDelete = book },
                         onCollections = { editingCollections = book },
                         onEdit = { editingDetails = book },
+                        preparing = preparing[book.id],
                         modifier = Modifier.animateItem(),
                     )
                 }
@@ -624,6 +627,7 @@ private fun BookTile(
     onDelete: () -> Unit,
     onCollections: () -> Unit,
     onEdit: () -> Unit,
+    preparing: Pair<Int, Int>?,
     modifier: Modifier = Modifier,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
@@ -657,44 +661,21 @@ private fun BookTile(
                     book.lastOpenedAt == 0L -> Badge("New", Modifier.align(Alignment.TopEnd))
                 }
             }
-            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }, offset = DpOffset(8.dp, 0.dp)) {
-                if (book.lastOpenedAt > 0) {
-                    DropdownMenuItem(
-                        text = { Text("Mark as unread") },
-                        leadingIcon = { Icon(Icons.Filled.Refresh, contentDescription = null) },
-                        onClick = {
-                            menuOpen = false
-                            vm.markUnread(book)
-                        },
-                    )
-                }
-                DropdownMenuItem(
-                    text = { Text("Edit details…") },
-                    leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
-                    onClick = {
-                        menuOpen = false
-                        onEdit()
-                    },
-                )
-                DropdownMenuItem(
-                    text = { Text("Collections…") },
-                    leadingIcon = { Icon(LibraryIcons.Collection, contentDescription = null) },
-                    onClick = {
-                        menuOpen = false
-                        onCollections()
-                    },
-                )
-                DropdownMenuItem(
-                    text = { Text("Remove from library") },
-                    leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null) },
-                    onClick = {
-                        menuOpen = false
-                        onDelete()
-                    },
+        }
+        if (preparing != null && !book.isReading()) {
+            Spacer(Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 1.5.dp)
+                Spacer(Modifier.width(6.dp))
+                val (done, total) = preparing
+                Text(
+                    if (total > 0) "Getting ready · ${done * 100 / total}%" else "Getting ready",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-        }
-        if (book.isReading()) {
+            Spacer(Modifier.height(4.dp))
+        } else if (book.isReading()) {
             Spacer(Modifier.height(10.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 LinearProgressIndicator(
@@ -716,20 +697,71 @@ private fun BookTile(
         } else {
             Spacer(Modifier.height(10.dp))
         }
-        Text(
-            book.title,
-            style = MaterialTheme.typography.titleSmall,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
-        if (book.author != null) {
-            Text(
-                book.author,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+        Row {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    book.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (book.author != null) {
+                    Text(
+                        book.author,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            // The same menu a long-press on the cover opens.
+            Box {
+                IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(32.dp).offset(x = 6.dp, y = (-4).dp)) {
+                    Icon(
+                        Icons.Filled.MoreVert,
+                        contentDescription = "More for ${book.title}",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }, offset = DpOffset((-8).dp, 0.dp)) {
+                        if (book.lastOpenedAt > 0) {
+                            DropdownMenuItem(
+                                text = { Text("Mark as unread") },
+                                leadingIcon = { Icon(Icons.Filled.Refresh, contentDescription = null) },
+                                onClick = {
+                                    menuOpen = false
+                                    vm.markUnread(book)
+                                },
+                            )
+                        }
+                        DropdownMenuItem(
+                            text = { Text("Edit details…") },
+                            leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
+                            onClick = {
+                                menuOpen = false
+                                onEdit()
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Collections…") },
+                            leadingIcon = { Icon(LibraryIcons.Collection, contentDescription = null) },
+                            onClick = {
+                                menuOpen = false
+                                onCollections()
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Remove from library") },
+                            leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null) },
+                            onClick = {
+                                menuOpen = false
+                                onDelete()
+                            },
+                        )
+                    }
+            }
         }
     }
 }

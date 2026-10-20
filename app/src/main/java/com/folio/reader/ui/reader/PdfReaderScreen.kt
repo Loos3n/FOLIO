@@ -42,9 +42,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.TextButton
 import androidx.compose.ui.text.style.TextAlign
-import com.folio.reader.pdf.PdfEpubWriter
-import com.folio.reader.pdf.PdfTextConverter
-import kotlinx.coroutines.CancellationException
+import com.folio.reader.pdf.PdfPrep
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -166,56 +164,37 @@ class PdfReaderViewModel(private val app: FolioApp, private val bookId: String) 
         }
     }
 
-    /** Shows the text version, picking the text out of the PDF first if that hasn't been done. */
+    /** Shows the text version, waiting for it to be made first if it isn't ready yet. */
     fun readAsText() {
-        val entry = library.get(bookId) ?: return
         if (convertJob?.isActive == true) return
         convertJob = viewModelScope.launch {
             library.setPdfPages(bookId, false)
+            val entry = library.get(bookId) ?: return@launch
+            val prep = app.pdfPrep
             if (library.textReady(entry)) {
+                // An older text version opens straight away; the better one replaces it in the background.
+                if (prep.needsPrep(entry)) prep.prepare(bookId)
                 _state.update { it.copy(openText = true) }
                 return@launch
             }
             _state.update { it.copy(loading = false, title = entry.title, converting = 0 to 0) }
-            val file = library.bookFile(entry)
-            val made = try {
-                val text = PdfTextConverter.extract(app, file) { done, total ->
-                    _state.update { it.copy(converting = done to total) }
-                }
-                if (text.scanned || text.chapters.isEmpty()) null
-                else withContext(Dispatchers.IO) {
-                    val pdf = runCatching { PdfBook.open(file) }.getOrNull()
-                    val cover = runCatching { pdf?.render(0, 900) }.getOrNull()
-                    val target = library.newTextFile(entry)
-                    val author = entry.author ?: text.author.takeIf(::meaningful)
-                    try {
-                        PdfEpubWriter.write(text, entry.title, author, cover, target) { page, l, t, r, b ->
-                            pdf?.renderRegion(page, l, t, r, b, 1200)
-                        }
-                    } finally {
-                        pdf?.close()
-                        cover?.recycle()
-                    }
-                    target to author
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                android.util.Log.w("FolioPdf", "Couldn't get the text of $bookId", e)
-                library.setPdfPages(bookId, true)
-                _state.update { it.copy(converting = null, notice = "Couldn't pick out the text in this PDF, so it's shown as pages.") }
-                openPages()
-                return@launch
+            val watch = launch {
+                prep.progress.collect { all -> all[bookId]?.let { p -> _state.update { it.copy(converting = p) } } }
             }
-            if (made != null) {
-                library.setPdfText(bookId, made.first, made.second)
-                _state.update { it.copy(converting = null, openText = true) }
-            } else {
-                library.setPdfText(bookId, null, null)
-                _state.update {
-                    it.copy(converting = null, notice = "This PDF is pictures of pages (a scan), so there's no text to show. Here are the pages instead.")
+            val outcome = prep.prepare(bookId).await()
+            watch.cancel()
+            when (outcome) {
+                PdfPrep.Outcome.Ready -> _state.update { it.copy(converting = null, openText = true) }
+                PdfPrep.Outcome.Scanned -> {
+                    _state.update {
+                        it.copy(converting = null, notice = "This PDF is pictures of pages (a scan), so there's no text to show. Here are the pages instead.")
+                    }
+                    openPages()
                 }
-                openPages()
+                is PdfPrep.Outcome.Failed -> {
+                    _state.update { it.copy(converting = null, notice = "Couldn't pick out the text in this PDF, so it's shown as pages.") }
+                    openPages()
+                }
             }
         }
     }
@@ -287,9 +266,6 @@ class PdfReaderViewModel(private val app: FolioApp, private val bookId: String) 
         pdf = null
         pages.evictAll()
     }
-
-    private fun meaningful(s: String) =
-        s.isNotBlank() && s.lowercase() !in setOf("anonymous", "unknown", "author", "user", "administrator", "untitled")
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

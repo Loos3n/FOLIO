@@ -146,7 +146,12 @@ class LibraryViewModel(private val app: FolioApp) : ViewModel() {
             }
             for (uri in epubs) {
                 library.import(uri)
-                    .onSuccess { added++; lastBook = it }
+                    .onSuccess {
+                        added++
+                        lastBook = it
+                        // Not when it's about to be opened: opening it starts the same work.
+                        if (it.isPdf && !openAfter) app.pdfPrep.prepare(it.id)
+                    }
                     .onFailure { failures += it.message ?: "Unknown error" }
             }
             _importing.value = false
@@ -164,6 +169,9 @@ class LibraryViewModel(private val app: FolioApp) : ViewModel() {
     }
 
     fun textReady(book: Book) = library.textReady(book)
+
+    /** PDFs being got ready to read: pages done and in all. */
+    val preparing: StateFlow<Map<String, Pair<Int, Int>>> = app.pdfPrep.progress
 
     fun showPdfPages(id: String) {
         // Saved before the page view opens, so it opens on the pages rather than the text.
@@ -207,6 +215,7 @@ class LibraryViewModel(private val app: FolioApp) : ViewModel() {
                 _events.send(LibraryEvent.Notice("Couldn't restore", it.message ?: "Something went wrong reading that file."))
             }
             val summary = result.getOrNull() ?: return@launch
+            app.pdfPrep.prepareAll()
             val c = summary.counts
             val parts = ArrayList<String>()
             parts += when {

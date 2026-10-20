@@ -150,6 +150,8 @@ data class Book(
     val audio: AudioInfo? = null,
     /** For a PDF: its text turned into an EPUB (in the books folder), read like any other book. */
     val textFileName: String? = null,
+    /** Which version of the PDF-to-text conversion made [textFileName]; older ones are redone. */
+    val textVersion: Int = 0,
     /** For a PDF: show its original pages rather than the text (chosen, or it has no text). */
     val pdfPages: Boolean = false,
     /** For a PDF's page view: the page the reader was on, and pages they bookmarked. */
@@ -177,6 +179,7 @@ data class Book(
         .put("scrollMode", scrollMode ?: JSONObject.NULL)
         .put("audio", audio?.toJson() ?: JSONObject.NULL)
         .put("textFileName", textFileName ?: JSONObject.NULL)
+        .put("textVersion", textVersion)
         .put("pdfPages", pdfPages)
         .put("pdfPage", pdfPage)
         .put("pdfMarks", JSONArray(pdfMarks))
@@ -203,6 +206,7 @@ data class Book(
             scrollMode = if (o.has("scrollMode") && !o.isNull("scrollMode")) o.optBoolean("scrollMode") else null,
             audio = o.optJSONObject("audio")?.let { AudioInfo.fromJson(it) },
             textFileName = o.optString("textFileName").takeIf { !o.isNull("textFileName") && it.isNotEmpty() },
+            textVersion = o.optInt("textVersion"),
             pdfPages = o.optBoolean("pdfPages"),
             pdfPage = o.optInt("pdfPage"),
             pdfMarks = o.optJSONArray("pdfMarks")?.let { a -> List(a.length()) { a.getInt(it) } }.orEmpty(),
@@ -238,24 +242,35 @@ class LibraryRepository(private val context: Context) {
     /** Whether a PDF's text version is ready to read. */
     fun textReady(book: Book): Boolean = textFile(book)?.exists() == true
 
-    /** Where a PDF's text version is written. */
-    fun newTextFile(book: Book): File = File(booksDir, "${book.id}-text.epub")
+    /** Where a PDF's text version is written: a new name each time, so a book open on the old one keeps working. */
+    fun newTextFile(book: Book): File = File(booksDir, "${book.id}-text-${System.currentTimeMillis()}.epub")
 
-    /** Records [file] (or the lack of usable text, when null) for the PDF [id]. */
-    suspend fun setPdfText(id: String, file: File?, author: String?) = update(id) { book ->
-        if (file == null) book.copy(textFileName = null, pdfPages = true)
-        else {
-            // Bookmarks made on pages by an earlier version mark pages, not places in the text.
-            val (pageMarks, kept) = book.bookmarks.partition { it.snippet.isEmpty() && it.chapterTitle.startsWith("Page ") }
-            book.copy(
-                textFileName = file.name,
-                author = book.author ?: author,
-                chapterIndex = 0,
-                chapterOffset = 0f,
-                bookmarks = kept,
-                pdfMarks = (book.pdfMarks + pageMarks.map { it.chapterIndex }).distinct().sorted(),
-            )
+    /**
+     * Records [file] (or the lack of usable text, when null) for the PDF [id], made by
+     * conversion [version]. When the text replaces an earlier one, [carryOver] moves the
+     * reader's place, bookmarks and highlights across to it.
+     */
+    suspend fun setPdfText(id: String, file: File?, author: String?, version: Int = 0, carryOver: ((Book) -> Book)? = null) {
+        val old = get(id)?.let(::textFile)
+        update(id) { book ->
+            if (file == null) book.copy(textFileName = null, pdfPages = true)
+            else if (carryOver != null) {
+                carryOver(book).copy(textFileName = file.name, textVersion = version, author = book.author ?: author)
+            } else {
+                // Bookmarks made on pages by an earlier version mark pages, not places in the text.
+                val (pageMarks, kept) = book.bookmarks.partition { it.snippet.isEmpty() && it.chapterTitle.startsWith("Page ") }
+                book.copy(
+                    textFileName = file.name,
+                    textVersion = version,
+                    author = book.author ?: author,
+                    chapterIndex = 0,
+                    chapterOffset = 0f,
+                    bookmarks = kept,
+                    pdfMarks = (book.pdfMarks + pageMarks.map { it.chapterIndex }).distinct().sorted(),
+                )
+            }
         }
+        if (old != null && old.name != file?.name) withContext(Dispatchers.IO) { old.delete() }
     }
 
     suspend fun setPdfPages(id: String, pages: Boolean) = update(id) { it.copy(pdfPages = pages) }
