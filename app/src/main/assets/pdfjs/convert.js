@@ -24,6 +24,106 @@
     return best;
   }
 
+
+  // ------------------------------------------------------------------ pictures
+
+  /** Applies [m] and then [ctm] (PDF matrices [a b c d e f]). */
+  function compose(m, ctm) {
+    return [
+      m[0] * ctm[0] + m[1] * ctm[2], m[0] * ctm[1] + m[1] * ctm[3],
+      m[2] * ctm[0] + m[3] * ctm[2], m[2] * ctm[1] + m[3] * ctm[3],
+      m[4] * ctm[0] + m[5] * ctm[2] + ctm[4], m[4] * ctm[1] + m[5] * ctm[3] + ctm[5],
+    ];
+  }
+
+  function boxOf(ctm, r) {
+    var xs = [], ys = [];
+    [[r[0], r[1]], [r[2], r[1]], [r[0], r[3]], [r[2], r[3]]].forEach(function (p) {
+      xs.push(ctm[0] * p[0] + ctm[2] * p[1] + ctm[4]);
+      ys.push(ctm[1] * p[0] + ctm[3] * p[1] + ctm[5]);
+    });
+    return [Math.min.apply(null, xs), Math.min.apply(null, ys), Math.max.apply(null, xs), Math.max.apply(null, ys)];
+  }
+
+  function near(a, b, pad) {
+    return a[0] - pad <= b[2] && b[0] - pad <= a[2] && a[1] - pad <= b[3] && b[1] - pad <= a[3];
+  }
+
+  /** Merges boxes that touch or nearly touch, counting how many shapes went into each. */
+  function cluster(boxes, pad) {
+    var groups = boxes.map(function (b) { return { r: b.slice(), n: 1 }; });
+    var merged = true;
+    while (merged) {
+      merged = false;
+      for (var i = 0; i < groups.length; i++) {
+        for (var j = i + 1; j < groups.length; j++) {
+          if (near(groups[i].r, groups[j].r, pad)) {
+            var a = groups[i].r, b = groups[j].r;
+            groups[i].r = [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])];
+            groups[i].n += groups[j].n;
+            groups.splice(j, 1);
+            merged = true;
+            j--;
+          }
+        }
+      }
+    }
+    return groups;
+  }
+
+  /**
+   * Where the pictures are on a page: photos and drawings (images), and charts or diagrams
+   * drawn with lines and shapes. Returned in page space, as [x0, y0, x1, y1].
+   */
+  async function picturesOf(page, OPS, view, lines) {
+    var list = await page.getOperatorList();
+    var ctm = [1, 0, 0, 1, 0, 0];
+    var stack = [];
+    var images = [], shapes = [];
+    var pageW = view[2] - view[0], pageH = view[3] - view[1];
+    for (var i = 0; i < list.fnArray.length; i++) {
+      var fn = list.fnArray[i], a = list.argsArray[i];
+      if (fn === OPS.save) stack.push(ctm);
+      else if (fn === OPS.restore) ctm = stack.pop() || ctm;
+      else if (fn === OPS.transform) ctm = compose(a, ctm);
+      else if (fn === OPS.paintFormXObjectBegin) { stack.push(ctm); if (a && a[0]) ctm = compose(a[0], ctm); }
+      else if (fn === OPS.paintFormXObjectEnd) ctm = stack.pop() || ctm;
+      else if (fn === OPS.paintImageXObject || fn === OPS.paintInlineImageXObject || fn === OPS.paintImageMaskXObject) {
+        images.push(boxOf(ctm, [0, 0, 1, 1]));
+      } else if (fn === OPS.constructPath && a && a[2] && isFinite(a[2][0])) {
+        shapes.push(boxOf(ctm, a[2]));
+      }
+    }
+    var inPage = function (b) {
+      return [Math.max(b[0], view[0]), Math.max(b[1], view[1]), Math.min(b[2], view[2]), Math.min(b[3], view[3])];
+    };
+    var textIn = function (r) {
+      var n = 0;
+      lines.forEach(function (l) {
+        var cx = (l.x0 + l.x1) / 2;
+        if (cx > r[0] - 2 && cx < r[2] + 2 && l.y > r[1] - 2 && l.y < r[3] + 2) n += l.chars;
+      });
+      return n;
+    };
+    var found = [];
+    images.map(inPage).forEach(function (b) {
+      var w = b[2] - b[0], h = b[3] - b[1];
+      if (w < 40 || h < 30) return; // ornaments, bullets, rules
+      if (textIn(b) > 300) return; // a page photo with text laid over it (a scan's text layer)
+      found.push(b);
+    });
+    cluster(shapes.map(inPage).filter(function (b) { return b[2] > b[0] || b[3] > b[1]; }), 6).forEach(function (g) {
+      var b = g.r, w = b[2] - b[0], h = b[3] - b[1];
+      if (g.n < 3 || w < 60 || h < 40) return; // lines under headings, boxes, single frames
+      if (w * h > pageW * pageH * 0.85) return; // a page background
+      if (textIn(b) > 200) return; // a box around text (a sidebar, a table of words)
+      found.push(b);
+    });
+    // A picture inside another (an image within a drawn frame) counts once.
+    found = cluster(found, 2).map(function (g) { return g.r; });
+    return found;
+  }
+
   /** Lines on one page, from pdf.js text items. */
   function linesOf(items, pageHeight) {
     var lines = [];
@@ -134,7 +234,16 @@
     pages.forEach(function (p, pageIndex) {
       if (outline[pageIndex]) { flush(); blocks.push({ type: 'break', title: outline[pageIndex], page: pageIndex }); }
       var prev = null;
+      var pics = (p.pictures || []).slice().sort(function (a, b) { return a.top - b.top; });
+      var placePictures = function (before) {
+        while (pics.length && (before == null || pics[0].top < before)) {
+          flush();
+          blocks.push({ type: 'img', page: pageIndex, rect: pics.shift().rect, text: '' });
+          prev = null;
+        }
+      };
       p.lines.forEach(function (l) {
+        placePictures(l.top);
         if (isFurniture(l, p)) return;
         var big = l.size > body * 1.18;
         var centred = left != null && right != null && l.x0 > left + body * 2 && Math.abs((l.x0 - left) - (right - l.x1)) < body * 2;
@@ -185,6 +294,7 @@
         para.lastShort = right != null && l.x1 < right - body * 3;
         prev = l;
       });
+      placePictures(null);
     });
     flush();
     joinHyphens(blocks);
@@ -229,6 +339,11 @@
       if (!hasBreaks) {
         var bigHeading = b.type === 'h' && b.size > body * 1.3 && b.text.length < 100;
         if ((bigHeading && cur.chars > 1500) || (cur.chars > 60000 && b.type === 'p')) start(bigHeading ? b.text : null, b.page);
+      }
+      if (b.type === 'img') {
+        var r = b.rect.map(function (v) { return Math.round(v * 10) / 10; });
+        cur.html.push('<img data-pdf="' + b.page + ',' + r.join(',') + '"/>');
+        return;
       }
       if (b.type === 'h') {
         if (!cur.title) cur.title = b.text;
@@ -287,7 +402,25 @@
       var tc = await page.getTextContent();
       var lines = linesOf(tc.items, vp.height);
       lines.forEach(function (l) { chars += l.chars; });
-      pages.push({ lines: lines, height: vp.height, width: vp.width });
+      var view = vp.viewBox;
+      var pics = [];
+      if (pdfjsLib.OPS) {
+        try { pics = await picturesOf(page, pdfjsLib.OPS, view, lines); } catch (e) { pics = []; }
+      }
+      // Labels inside a chart belong to the picture, not the text.
+      if (pics.length) {
+        lines = lines.filter(function (l) {
+          var cx = (l.x0 + l.x1) / 2;
+          return !pics.some(function (r) { return cx > r[0] - 2 && cx < r[2] + 2 && l.y > r[1] - 2 && l.y < r[3] + 2; });
+        });
+      }
+      pages.push({
+        lines: lines, height: vp.height, width: vp.width,
+        pictures: pics.map(function (r) {
+          // Kept as distances from the page's top-left corner, as Android draws pages.
+          return { top: view[3] - r[3], rect: [r[0] - view[0], view[3] - r[3], r[2] - view[0], view[3] - r[1]] };
+        }),
+      });
       page.cleanup();
       if (opts.onProgress) opts.onProgress(i, doc.numPages);
     }

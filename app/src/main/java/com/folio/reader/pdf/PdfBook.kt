@@ -2,6 +2,7 @@ package com.folio.reader.pdf
 
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.Matrix
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
 import java.io.Closeable
@@ -35,6 +36,31 @@ class PdfBook private constructor(private val fd: ParcelFileDescriptor, private 
             val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
             bitmap.eraseColor(Color.WHITE)
             page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+            bitmap
+        }
+    }
+
+    /**
+     * The part of page [index] between [left], [top], [right] and [bottom] (points from the
+     * page's top-left), drawn at most [maxWidthPx] wide on white. Used for a PDF's pictures.
+     */
+    @Synchronized
+    fun renderRegion(index: Int, left: Float, top: Float, right: Float, bottom: Float, maxWidthPx: Int): Bitmap? {
+        if (closed || index !in 0 until renderer.pageCount) return null
+        val w = right - left
+        val h = bottom - top
+        if (w < 1 || h < 1) return null
+        return page(index) { page ->
+            val scale = minOf(maxWidthPx / w, 4f, MAX_SIDE / h)
+            val bw = (w * scale).toInt().coerceIn(1, MAX_SIDE)
+            val bh = (h * scale).toInt().coerceIn(1, MAX_SIDE)
+            val bitmap = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888)
+            bitmap.eraseColor(Color.WHITE)
+            val matrix = Matrix().apply {
+                setScale(scale, scale)
+                postTranslate(-left * scale, -top * scale)
+            }
+            page.render(bitmap, null, matrix, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
             bitmap
         }
     }

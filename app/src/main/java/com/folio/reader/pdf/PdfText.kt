@@ -195,7 +195,20 @@ object PdfTextConverter {
 object PdfEpubWriter {
     private val CONTROL = Regex("[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\uFFFE\\uFFFF]")
 
-    fun write(text: PdfText, title: String, author: String?, cover: Bitmap?, target: File) {
+    private val PICTURE = Regex("<img data-pdf=\"(\\d+),(-?[\\d.]+),(-?[\\d.]+),(-?[\\d.]+),(-?[\\d.]+)\"/>")
+
+    /**
+     * [figure] draws a picture from the PDF (page, left, top, right, bottom in points); a
+     * picture it can't draw is left out.
+     */
+    fun write(
+        text: PdfText,
+        title: String,
+        author: String?,
+        cover: Bitmap?,
+        target: File,
+        figure: (page: Int, left: Float, top: Float, right: Float, bottom: Float) -> Bitmap? = { _, _, _, _, _ -> null },
+    ) {
         val tmp = File(target.parentFile, target.name + ".tmp")
         ZipOutputStream(FileOutputStream(tmp)).use { zip ->
             // The mimetype entry comes first and uncompressed, as EPUB requires.
@@ -227,8 +240,19 @@ object PdfEpubWriter {
             if (coverBytes != null) put("OEBPS/cover.jpg", coverBytes)
 
             val chapters = text.chapters
+            val pictures = mutableListOf<String>()
             chapters.forEachIndexed { i, c ->
-                put("OEBPS/c$i.xhtml", page(c.title, CONTROL.replace(c.html, "")))
+                val html = PICTURE.replace(CONTROL.replace(c.html, "")) { m ->
+                    val (pg, l, t, r, b) = m.destructured
+                    val bitmap = runCatching { figure(pg.toInt(), l.toFloat(), t.toFloat(), r.toFloat(), b.toFloat()) }.getOrNull()
+                        ?: return@replace ""
+                    val name = "img/f${pictures.size}.jpg"
+                    put("OEBPS/$name", ByteArrayOutputStream().also { out -> bitmap.compress(Bitmap.CompressFormat.JPEG, 85, out) }.toByteArray())
+                    bitmap.recycle()
+                    pictures += name
+                    "<img class=\"pdf\" src=\"$name\" alt=\"\"/>"
+                }
+                put("OEBPS/c$i.xhtml", page(c.title, html))
             }
             put(
                 "OEBPS/nav.xhtml",
@@ -240,6 +264,7 @@ object PdfEpubWriter {
                 append("<item id=\"nav\" href=\"nav.xhtml\" media-type=\"application/xhtml+xml\" properties=\"nav\"/>")
                 append("<item id=\"css\" href=\"style.css\" media-type=\"text/css\"/>")
                 if (coverBytes != null) append("<item id=\"cover\" href=\"cover.jpg\" media-type=\"image/jpeg\" properties=\"cover-image\"/>")
+                pictures.forEachIndexed { i, name -> append("<item id=\"f$i\" href=\"$name\" media-type=\"image/jpeg\"/>") }
                 chapters.indices.forEach { append("<item id=\"c$it\" href=\"c$it.xhtml\" media-type=\"application/xhtml+xml\"/>") }
             }
             val spine = chapters.indices.joinToString("") { "<itemref idref=\"c$it\"/>" }
@@ -273,5 +298,6 @@ object PdfEpubWriter {
         "p.c{text-align:center;text-indent:0;margin:0.6em 0;}" +
         "h1,h2,h3{text-align:center;line-height:1.25;}" +
         "h1{font-size:1.6em;margin:1.5em 0 1em;}h2{font-size:1.3em;margin:1.3em 0 0.8em;}h3{font-size:1.05em;margin:1.2em 0 0.6em;}" +
-        "sup{font-size:0.7em;line-height:0;}"
+        "sup{font-size:0.7em;line-height:0;}" +
+        "img.pdf{display:block;max-width:100%;height:auto;margin:1em auto;}"
 }

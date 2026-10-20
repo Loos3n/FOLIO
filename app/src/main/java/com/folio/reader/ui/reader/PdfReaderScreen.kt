@@ -184,11 +184,18 @@ class PdfReaderViewModel(private val app: FolioApp, private val bookId: String) 
                 }
                 if (text.scanned || text.chapters.isEmpty()) null
                 else withContext(Dispatchers.IO) {
-                    val cover = runCatching { PdfBook.open(file).use { it.render(0, 900) } }.getOrNull()
+                    val pdf = runCatching { PdfBook.open(file) }.getOrNull()
+                    val cover = runCatching { pdf?.render(0, 900) }.getOrNull()
                     val target = library.newTextFile(entry)
                     val author = entry.author ?: text.author.takeIf(::meaningful)
-                    PdfEpubWriter.write(text, entry.title, author, cover, target)
-                    cover?.recycle()
+                    try {
+                        PdfEpubWriter.write(text, entry.title, author, cover, target) { page, l, t, r, b ->
+                            pdf?.renderRegion(page, l, t, r, b, 1200)
+                        }
+                    } finally {
+                        pdf?.close()
+                        cover?.recycle()
+                    }
                     target to author
                 }
             } catch (e: CancellationException) {
