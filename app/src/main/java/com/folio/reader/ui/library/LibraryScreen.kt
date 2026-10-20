@@ -42,6 +42,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Delete
@@ -120,6 +121,7 @@ fun LibraryScreen(
     val collections by vm.collections.collectAsStateWithLifecycle()
     var showStats by remember { mutableStateOf(false) }
     var editingCollections by remember { mutableStateOf<Book?>(null) }
+    var editingDetails by remember { mutableStateOf<Book?>(null) }
     val importing by vm.importing.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     var pendingDelete by remember { mutableStateOf<Book?>(null) }
@@ -251,6 +253,7 @@ fun LibraryScreen(
                         onOpen = { onOpen(book.id) },
                         onDelete = { pendingDelete = book },
                         onCollections = { editingCollections = book },
+                        onEdit = { editingDetails = book },
                         modifier = Modifier.animateItem(),
                     )
                 }
@@ -301,6 +304,18 @@ fun LibraryScreen(
                 editingCollections = null
             },
             onDismiss = { editingCollections = null },
+        )
+    }
+
+    editingDetails?.let { book ->
+        EditDetailsDialog(
+            book = book,
+            cover = vm.coverFile(book),
+            onSave = { title, author, cover, removeCover ->
+                vm.editDetails(book, title, author, cover, removeCover)
+                editingDetails = null
+            },
+            onDismiss = { editingDetails = null },
         )
     }
 
@@ -607,6 +622,7 @@ private fun BookTile(
     onOpen: () -> Unit,
     onDelete: () -> Unit,
     onCollections: () -> Unit,
+    onEdit: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
@@ -651,6 +667,14 @@ private fun BookTile(
                         },
                     )
                 }
+                DropdownMenuItem(
+                    text = { Text("Edit details…") },
+                    leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
+                    onClick = {
+                        menuOpen = false
+                        onEdit()
+                    },
+                )
                 DropdownMenuItem(
                     text = { Text("Collections…") },
                     leadingIcon = { Icon(LibraryIcons.Collection, contentDescription = null) },

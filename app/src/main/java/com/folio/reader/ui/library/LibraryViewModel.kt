@@ -219,6 +219,13 @@ class LibraryViewModel(private val app: FolioApp) : ViewModel() {
         }
     }
 
+    fun editDetails(book: Book, title: String, author: String?, cover: Uri?, removeCover: Boolean) {
+        viewModelScope.launch {
+            library.editDetails(book.id, title, author, cover, removeCover)
+                .onFailure { _events.send(LibraryEvent.Message("Couldn't save. ${it.message ?: ""}".trim())) }
+        }
+    }
+
     fun markUnread(book: Book) {
         viewModelScope.launch { library.resetProgress(book.id) }
     }

@@ -23,6 +23,7 @@ import org.json.JSONObject
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.IOException
 import java.util.UUID
 
 /** What a restore did: books added, books already here that were updated, and books skipped. */
@@ -216,6 +217,7 @@ data class Book(
 class LibraryRepository(private val context: Context) {
     companion object {
         val AUDIO_EXTENSIONS = setOf("mp3", "m4a", "m4b", "aac", "ogg", "oga", "opus", "flac", "wav")
+        private const val MAX_COVER_BYTES = 30L * 1024 * 1024
     }
 
     private val booksDir = File(context.filesDir, "books").apply { mkdirs() }
@@ -607,6 +609,37 @@ class LibraryRepository(private val context: Context) {
 
     private fun saveCover(epub: EpubBook, path: String, id: String): String? =
         epub.readBytes(path)?.let { saveCover(it, id) }
+
+    /**
+     * Changes a book's title and author, and its cover when [cover] is given (a picture the
+     * reader picked) or [removeCover] is set (back to the plain drawn cover).
+     */
+    suspend fun editDetails(id: String, title: String, author: String?, cover: Uri?, removeCover: Boolean): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val book = get(id) ?: throw IOException("That book is no longer in your library.")
+                // A new name each time, so covers already drawn on screen are replaced.
+                val newCover = cover?.let { uri ->
+                    val bytes = context.contentResolver.openInputStream(uri)?.use { BookSafety.readLimited(it, MAX_COVER_BYTES) }
+                        ?: throw IOException("Couldn't open that picture.")
+                    saveCover(bytes, "$id-${System.currentTimeMillis()}") ?: throw IOException("That file isn't a picture Folio can show.")
+                }
+                val coverName = when {
+                    newCover != null -> newCover
+                    removeCover -> null
+                    else -> book.coverFileName
+                }
+                if (coverName != book.coverFileName) coverFile(book)?.delete()
+                update(id) {
+                    it.copy(
+                        title = title.trim().ifEmpty { it.title },
+                        author = author?.trim()?.takeIf { a -> a.isNotEmpty() },
+                        coverFileName = coverName,
+                    )
+                }
+                Unit
+            }
+        }
 
     private fun saveCover(bytes: ByteArray, id: String): String? = runCatching {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }

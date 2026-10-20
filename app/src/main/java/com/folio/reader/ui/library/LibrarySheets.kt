@@ -2,6 +2,24 @@
 
 package com.folio.reader.ui.library
 
+import android.content.Context
+import android.graphics.BitmapFactory
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -256,3 +274,96 @@ internal fun CollectionsDialog(
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
+
+/** Changes a book's title, author and cover. A messy PDF name is the usual reason. */
+@Composable
+internal fun EditDetailsDialog(
+    book: Book,
+    cover: File?,
+    onSave: (title: String, author: String?, cover: Uri?, removeCover: Boolean) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var title by remember(book.id) { mutableStateOf(book.title) }
+    var author by remember(book.id) { mutableStateOf(book.author.orEmpty()) }
+    var picked by remember(book.id) { mutableStateOf<Uri?>(null) }
+    var removed by remember(book.id) { mutableStateOf(false) }
+    val pickCover = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+        if (uri != null) {
+            picked = uri
+            removed = false
+        }
+    }
+    val context = LocalContext.current
+    val pickedImage by produceState<ImageBitmap?>(null, picked) {
+        val uri = picked
+        value = if (uri == null) null else withContext(Dispatchers.IO) { decodePreview(context, uri) }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Filled.Edit, contentDescription = null) },
+        title = { Text("Book details") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    val shown = title.ifBlank { book.title }
+                    Box(
+                        Modifier
+                            .width(72.dp)
+                            .aspectRatio(2f / 3f)
+                            .clip(RoundedCornerShape(6.dp)),
+                    ) {
+                        val image = pickedImage
+                        if (image != null) {
+                            Image(image, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                        } else {
+                            BookCover(shown, author.ifBlank { null }, if (removed) null else cover, Modifier.fillMaxSize())
+                        }
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column {
+                        TextButton(onClick = { pickCover.launch("image/*") }) { Text("Choose a cover") }
+                        if ((cover != null && !removed) || picked != null) {
+                            TextButton(onClick = {
+                                picked = null
+                                removed = true
+                            }) { Text("Use a plain cover") }
+                        }
+                    }
+                }
+                OutlinedTextField(
+                    value = title,
+                    onValueChange = { title = it },
+                    label = { Text("Title") },
+                    singleLine = false,
+                    maxLines = 3,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = author,
+                    onValueChange = { author = it },
+                    label = { Text("Author") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onSave(title, author, picked, removed && picked == null) },
+                enabled = title.isNotBlank(),
+            ) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+/** A picked picture, shrunk for the small preview in [EditDetailsDialog]. */
+private fun decodePreview(context: Context, uri: Uri): ImageBitmap? = runCatching {
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+    var sample = 1
+    while (bounds.outHeight / (sample * 2) >= 400) sample *= 2
+    context.contentResolver.openInputStream(uri)?.use {
+        BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample })
+    }?.asImageBitmap()
+}.getOrNull()
