@@ -1,5 +1,6 @@
 package com.folio.reader.ui.library
 
+import com.folio.reader.data.ReaderSettings
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -58,6 +59,11 @@ class LibraryViewModel(private val app: FolioApp) : ViewModel() {
     val goalMinutes: StateFlow<Int> = app.settings.settings
         .map { it.dailyGoalMinutes }
         .stateIn(viewModelScope, SharingStarted.Eagerly, app.settings.settings.value.dailyGoalMinutes)
+
+    /** Display settings (fonts, theme, light), shared with the reader. */
+    val display: StateFlow<ReaderSettings> = app.settings.settings
+
+    fun updateDisplay(transform: (ReaderSettings) -> ReaderSettings) = app.settings.update(transform)
 
     fun setGoal(minutes: Int) = app.settings.update { it.copy(dailyGoalMinutes = minutes) }
 

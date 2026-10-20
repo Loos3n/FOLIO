@@ -2,6 +2,8 @@
 
 package com.folio.reader.ui.library
 
+import com.folio.reader.ui.reader.SettingsSheet
+import com.folio.reader.ui.reader.ReaderIcons
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -123,6 +125,7 @@ fun LibraryScreen(
     val collection by vm.collection.collectAsStateWithLifecycle()
     val collections by vm.collections.collectAsStateWithLifecycle()
     var showStats by remember { mutableStateOf(false) }
+    var showDisplay by remember { mutableStateOf(false) }
     var editingCollections by remember { mutableStateOf<Book?>(null) }
     var editingDetails by remember { mutableStateOf<Book?>(null) }
     val preparing by vm.preparing.collectAsStateWithLifecycle()
@@ -215,6 +218,7 @@ fun LibraryScreen(
                         sort = sort,
                         onSort = vm::setSort,
                         onStats = { showStats = true },
+                        onDisplay = { showDisplay = true },
                         onFindFree = onFindFree,
                         onBackUp = backUp,
                         onRestore = restore,
@@ -296,6 +300,16 @@ fun LibraryScreen(
             confirmButton = { TextButton(onClick = { notice = null }) { Text("OK") } },
         )
     }
+    if (showDisplay) {
+        val display by vm.display.collectAsStateWithLifecycle()
+        SettingsSheet(
+            settings = display,
+            scrollMode = display.scrollDefault,
+            onScrollMode = { on -> vm.updateDisplay { it.copy(scrollDefault = on) } },
+            onChange = vm::updateDisplay,
+            onDismiss = { showDisplay = false },
+        )
+    }
     if (showStats) {
         val stats by vm.stats.collectAsStateWithLifecycle()
         val goal by vm.goalMinutes.collectAsStateWithLifecycle()
@@ -356,6 +370,7 @@ private fun Header(
     sort: SortOrder,
     onSort: (SortOrder) -> Unit,
     onStats: () -> Unit,
+    onDisplay: () -> Unit,
     onFindFree: () -> Unit,
     onBackUp: () -> Unit,
     onRestore: () -> Unit,
@@ -376,6 +391,9 @@ private fun Header(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+            IconButton(onClick = onDisplay) {
+                Icon(ReaderIcons.Brightness, contentDescription = "Display and light", tint = MaterialTheme.colorScheme.primary)
             }
             IconButton(onClick = onStats) {
                 Icon(LibraryIcons.Stats, contentDescription = "Reading stats", tint = MaterialTheme.colorScheme.primary)

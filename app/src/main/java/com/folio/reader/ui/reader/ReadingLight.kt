@@ -17,8 +17,9 @@ import com.folio.reader.data.ReaderSettings
 private val WARM = Color(0xFFFF9A3C)
 
 /**
- * The reader's own screen brightness (just while a book is open) and a warm tint over the
- * page, for reading at night. Goes last in the screen's box so it covers the page.
+ * The brightness and warm tint chosen in Display, over the whole app (library and books
+ * alike, so leaving a book doesn't suddenly light the screen up). Goes last in the app's
+ * box so it covers every screen; with Auto, the phone's own brightness applies.
  */
 @Composable
 fun ReadingLight(settings: ReaderSettings) {
@@ -31,11 +32,7 @@ fun ReadingLight(settings: ReaderSettings) {
                 else brightness.coerceIn(0.01f, 1f)
             }
         }
-        onDispose {
-            window?.let { w ->
-                w.attributes = w.attributes.apply { screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE }
-            }
-        }
+        onDispose { }
     }
     val warmth = settings.warmth.coerceIn(0f, 1f)
     // Below the phone's lowest backlight, the page itself is dimmed.

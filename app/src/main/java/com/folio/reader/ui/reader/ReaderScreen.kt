@@ -510,7 +510,6 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
                         .padding(top = 30.dp, bottom = 30.dp),
                 )
             }
-            ReadingLight(settings)
 
             // Reading ruler (scrolling mode): a clear band to read in, with the text above and
             // below it softly dimmed. It takes no touches, so the page scrolls underneath.
@@ -1466,7 +1465,7 @@ private fun BookmarkList(
 }
 
 @Composable
-private fun SettingsSheet(
+internal fun SettingsSheet(
     settings: ReaderSettings,
     scrollMode: Boolean,
     onScrollMode: (Boolean) -> Unit,
