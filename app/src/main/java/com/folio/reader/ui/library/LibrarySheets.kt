@@ -11,9 +11,11 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -38,6 +40,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -74,22 +78,22 @@ private fun duration(seconds: Long): String {
     }
 }
 
-/** Days in a row with some reading, up to today (or yesterday, if today hasn't started yet). */
-private fun streak(stats: StatsSnapshot, today: LocalDate): Int {
-    fun read(d: LocalDate) = stats.days[d.toString()]?.let { it.seconds >= 60 || it.pages >= 2 } == true
-    var day = if (read(today)) today else today.minusDays(1)
-    var n = 0
-    while (read(day)) {
-        n++
-        day = day.minusDays(1)
-    }
-    return n
-}
+private val GOAL_CHOICES = listOf(0, 5, 10, 15, 20, 30, 45, 60, 90)
 
 @Composable
-internal fun StatsSheet(stats: StatsSnapshot, books: List<Book>, onDismiss: () -> Unit) {
+internal fun StatsSheet(
+    stats: StatsSnapshot,
+    books: List<Book>,
+    goalMinutes: Int,
+    onSetGoal: (Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
     val today = remember { LocalDate.now() }
     val scheme = MaterialTheme.colorScheme
+    var choosingGoal by remember { mutableStateOf(false) }
+    if (choosingGoal) {
+        GoalDialog(goalMinutes, onPick = { onSetGoal(it); choosingGoal = false }, onDismiss = { choosingGoal = false })
+    }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(
             Modifier
@@ -100,21 +104,61 @@ internal fun StatsSheet(stats: StatsSnapshot, books: List<Book>, onDismiss: () -
         ) {
             Text("Reading stats", style = MaterialTheme.typography.headlineSmall)
 
-            val days = streak(stats, today)
+            val days = stats.streak(today, goalMinutes)
+            val todaySeconds = stats.secondsOn(today)
+            val met = goalMinutes > 0 && todaySeconds >= goalMinutes * 60L
             Surface(color = scheme.primaryContainer, contentColor = scheme.onPrimaryContainer, shape = RoundedCornerShape(24.dp)) {
-                Row(Modifier.fillMaxWidth().padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(LibraryIcons.Flame, contentDescription = null, tint = scheme.primary, modifier = Modifier.size(40.dp))
-                    Spacer(Modifier.width(16.dp))
-                    Column {
+                Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 20.dp, bottom = 8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(56.dp), contentAlignment = Alignment.Center) {
+                            if (goalMinutes > 0) {
+                                CircularProgressIndicator(
+                                    progress = { (todaySeconds / (goalMinutes * 60f)).coerceIn(0f, 1f) },
+                                    modifier = Modifier.fillMaxSize(),
+                                    strokeWidth = 5.dp,
+                                    trackColor = scheme.primary.copy(alpha = 0.18f),
+                                    strokeCap = StrokeCap.Round,
+                                )
+                            }
+                            Icon(
+                                if (met) Icons.Filled.Check else LibraryIcons.Flame,
+                                contentDescription = null,
+                                tint = scheme.primary,
+                                modifier = Modifier.size(if (goalMinutes > 0) 28.dp else 40.dp),
+                            )
+                        }
+                        Spacer(Modifier.width(16.dp))
+                        Column {
+                            Text(
+                                if (days == 1) "1 day" else "$days days",
+                                style = MaterialTheme.typography.headlineMedium,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                when {
+                                    days > 0 -> "Reading streak"
+                                    goalMinutes > 0 -> "Meet today's goal to start a streak"
+                                    else -> "Read today to start a streak"
+                                },
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            if (days == 1) "1 day" else "$days days",
-                            style = MaterialTheme.typography.headlineMedium,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        Text(
-                            if (days == 0) "Read today to start a streak" else "Reading streak",
+                            when {
+                                goalMinutes == 0 -> "No daily goal yet"
+                                met -> "Today's goal is done: ${todaySeconds / 60} of $goalMinutes min"
+                                else -> "${todaySeconds / 60} of $goalMinutes min today"
+                            },
                             style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.weight(1f),
                         )
+                        TextButton(onClick = { choosingGoal = true }) {
+                            Text(if (goalMinutes == 0) "Set a goal" else "Change")
+                        }
                     }
                 }
             }
@@ -367,3 +411,35 @@ private fun decodePreview(context: Context, uri: Uri): ImageBitmap? = runCatchin
         BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample })
     }?.asImageBitmap()
 }.getOrNull()
+
+@Composable
+private fun GoalDialog(current: Int, onPick: (Int) -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(LibraryIcons.Flame, contentDescription = null) },
+        title = { Text("Daily reading goal") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text(
+                    "Reading and listening both count. Meet your goal each day to grow your streak.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+                GOAL_CHOICES.forEach { minutes ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { onPick(minutes) },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = minutes == current, onClick = { onPick(minutes) })
+                        Text(if (minutes == 0) "No goal" else "$minutes minutes a day", style = MaterialTheme.typography.bodyLarge)
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}

@@ -21,6 +21,8 @@ import com.folio.reader.ui.theme.FolioTheme
 class MainActivity : ComponentActivity() {
     companion object {
         const val EXTRA_OPEN_AUDIO = "com.folio.reader.OPEN_AUDIO"
+        /** From the home-screen widget: the book to carry on with. */
+        const val EXTRA_OPEN_BOOK = "com.folio.reader.OPEN_BOOK"
     }
 
     /** EPUBs handed to us by other apps ("Open with" / "Share"), waiting to be imported. */
@@ -67,6 +69,9 @@ class MainActivity : ComponentActivity() {
         // From the playback notification: back to the audiobook that's playing.
         if (intent?.getBooleanExtra(EXTRA_OPEN_AUDIO, false) == true) {
             (application as FolioApp).audio.state.value.bookId?.let { openBook.value = it }
+        }
+        intent?.getStringExtra(EXTRA_OPEN_BOOK)?.let { id ->
+            if ((application as FolioApp).library.get(id) != null) openBook.value = id
         }
         val debuggable = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
         if (debuggable) {

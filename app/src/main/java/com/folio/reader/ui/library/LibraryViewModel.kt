@@ -55,6 +55,12 @@ class LibraryViewModel(private val app: FolioApp) : ViewModel() {
 
     val stats: StateFlow<StatsSnapshot> = app.stats.stats
 
+    val goalMinutes: StateFlow<Int> = app.settings.settings
+        .map { it.dailyGoalMinutes }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, app.settings.settings.value.dailyGoalMinutes)
+
+    fun setGoal(minutes: Int) = app.settings.update { it.copy(dailyGoalMinutes = minutes) }
+
     /** Every collection name in use, alphabetically. */
     val collections: StateFlow<List<String>> = library.books
         .map { list -> list.flatMap { it.collections }.distinct().sortedBy { it.lowercase() } }

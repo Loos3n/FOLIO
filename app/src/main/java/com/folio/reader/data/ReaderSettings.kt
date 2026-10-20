@@ -45,6 +45,8 @@ data class ReaderSettings(
     val autoScrollSpeed: Float = 40f,
     /** The reader's measured reading speed, for "minutes left"; 0 until learned. */
     val charsPerMinute: Float = 0f,
+    /** Minutes of reading (or listening) to aim for each day; 0 = no goal. */
+    val dailyGoalMinutes: Int = 0,
 ) {
     fun resolvedTheme(systemDark: Boolean): ReaderTheme =
         theme ?: if (systemDark) ReaderTheme.Dark else ReaderTheme.Light
@@ -74,6 +76,7 @@ class SettingsRepository(context: Context) {
             .putBoolean("ruler", next.ruler)
             .putFloat("autoScrollSpeed", next.autoScrollSpeed)
             .putFloat("charsPerMinute", next.charsPerMinute)
+            .putInt("dailyGoalMinutes", next.dailyGoalMinutes)
             .apply()
     }
 
@@ -123,6 +126,7 @@ class SettingsRepository(context: Context) {
             ruler = prefs.getBoolean("ruler", d.ruler),
             autoScrollSpeed = prefs.getFloat("autoScrollSpeed", d.autoScrollSpeed),
             charsPerMinute = prefs.getFloat("charsPerMinute", d.charsPerMinute),
+            dailyGoalMinutes = prefs.getInt("dailyGoalMinutes", d.dailyGoalMinutes),
         )
     }
 }

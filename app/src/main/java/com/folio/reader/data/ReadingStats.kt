@@ -22,7 +22,26 @@ data class StatsSnapshot(
     val days: Map<String, DayStats> = emptyMap(),
     /** Seconds spent in each book, by book id. */
     val books: Map<String, Long> = emptyMap(),
-)
+) {
+    fun secondsOn(day: LocalDate): Long = days[day.toString()]?.seconds ?: 0L
+
+    /** Whether [day] counts towards a streak: the daily goal met, or with no goal, some reading. */
+    fun counts(day: LocalDate, goalMinutes: Int): Boolean {
+        val d = days[day.toString()] ?: return false
+        return if (goalMinutes > 0) d.seconds >= goalMinutes * 60L else d.seconds >= 60 || d.pages >= 2
+    }
+
+    /** Days in a row that count, up to today (or yesterday, while today is still to come). */
+    fun streak(today: LocalDate, goalMinutes: Int): Int {
+        var day = if (counts(today, goalMinutes)) today else today.minusDays(1)
+        var n = 0
+        while (counts(day, goalMinutes)) {
+            n++
+            day = day.minusDays(1)
+        }
+        return n
+    }
+}
 
 /**
  * Keeps a running tally of reading time and pages turned per day, saved to a small JSON

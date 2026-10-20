@@ -1,3 +1,8 @@
 <resources>
     <color name="splash_background">#FF141210</color>
+    <color name="widget_background">#FF221F1C</color>
+    <color name="widget_text">#FFECE6DD</color>
+    <color name="widget_text_muted">#FFAAA195</color>
+    <color name="widget_accent">#FFFFB59C</color>
+    <color name="widget_track">#40FFB59C</color>
 </resources>

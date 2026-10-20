@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">Folio</string>
+    <string name="widget_description">The book you\'re reading, one tap from carrying on</string>
 </resources>

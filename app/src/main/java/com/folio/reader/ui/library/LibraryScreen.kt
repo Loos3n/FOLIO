@@ -293,7 +293,8 @@ fun LibraryScreen(
     }
     if (showStats) {
         val stats by vm.stats.collectAsStateWithLifecycle()
-        StatsSheet(stats = stats, books = allBooks, onDismiss = { showStats = false })
+        val goal by vm.goalMinutes.collectAsStateWithLifecycle()
+        StatsSheet(stats = stats, books = allBooks, goalMinutes = goal, onSetGoal = vm::setGoal, onDismiss = { showStats = false })
     }
     editingCollections?.let { book ->
         CollectionsDialog(

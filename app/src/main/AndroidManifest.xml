@@ -53,6 +53,18 @@
             </intent-filter>
         </activity>
 
+        <receiver
+            android:name=".widget.ReadingWidget"
+            android:exported="false"
+            android:label="Folio: current book">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/reading_widget" />
+        </receiver>
+
         <service
             android:name=".audio.PlaybackService"
             android:exported="true"

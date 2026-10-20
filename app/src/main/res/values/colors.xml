@@ -1,4 +1,9 @@
 <resources>
     <color name="splash_background">#FFFAF7F2</color>
     <color name="ic_launcher_background">#FF9A4A2E</color>
+    <color name="widget_background">#FFFAF7F2</color>
+    <color name="widget_text">#FF26231F</color>
+    <color name="widget_text_muted">#FF6B645B</color>
+    <color name="widget_accent">#FF9A4A2E</color>
+    <color name="widget_track">#339A4A2E</color>
 </resources>
