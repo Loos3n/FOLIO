@@ -109,10 +109,11 @@ if [ "${PART:-}" = "turn" ]; then
   adb shell screenrecord --time-limit 12 /sdcard/turn.mp4 &
   REC=$!
   sleep 1
-  swipe_next
+  # A slow drag (the page should follow the finger), a quick swipe back, a short drag let go.
+  adb shell input swipe $((W * 9 / 10)) $((H / 2)) $((W * 1 / 10)) $((H / 2)) 1500; sleep 2
   adb shell input swipe $((W * 2 / 10)) $((H / 2)) $((W * 8 / 10)) $((H / 2)) 150; sleep 2
-  swipe_next
-  swipe_next
+  adb shell input swipe $((W * 8 / 10)) $((H / 2)) $((W * 7 / 10)) $((H / 2)) 600; sleep 2
+  adb shell input tap $((W * 9 / 10)) $((H / 2)); sleep 2
   wait $REC
   adb pull /sdcard/turn.mp4 "$OUT/turn.mp4" || true
   mkdir -p "$OUT/frames"

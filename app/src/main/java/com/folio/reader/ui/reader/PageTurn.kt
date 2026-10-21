@@ -11,7 +11,7 @@ import android.os.Handler
 import android.os.Looper
 import android.view.PixelCopy
 import android.view.View
-import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -55,10 +56,17 @@ class PageTurner {
     /** Until the new page is drawn, the picture covers the book whichever way it's going. */
     var covering by mutableStateOf(false)
         private set
-    val progress = Animatable(0f)
+    /** 0 = the old page lies flat, 1 = it has turned right over. */
+    var progress by mutableFloatStateOf(0f)
+        private set
 
     private var job: Job? = null
     private var ready: CompletableDeferred<Unit>? = null
+    /** Where the finger has dragged the page to, while the picture is still being taken. */
+    private var dragTarget = 0f
+    private var dragging = false
+    /** The picture couldn't be taken: the turn happens without being drawn. */
+    private var unseen = false
 
     /** The book finished laying out a chapter (the turn may be waiting for it). */
     fun chapterReady() {
@@ -66,45 +74,87 @@ class PageTurner {
     }
 
     /**
-     * Turns the page in [view]: [move] makes the book change page (without its own animation).
-     * [edge] means it moves into another chapter, so wait for that to be laid out.
+     * Starts turning the page in [view] under the reader's finger. [move] makes the book change
+     * page (without its own animation); [edge] means into another chapter, so wait for that.
      */
-    fun turn(scope: CoroutineScope, view: View, forward: Boolean, edge: Boolean, move: () -> Unit) {
+    fun start(scope: CoroutineScope, view: View, forward: Boolean, edge: Boolean, move: () -> Unit) {
         job?.cancel()
         clear()
+        dragging = true
+        dragTarget = 0f
+        unseen = false
         job = scope.launch {
             val shot = capture(view)
             Log.d(TAG, "turn forward=$forward edge=$edge captured=${shot != null}")
             if (shot == null) {
-                move()
+                unseen = true
                 return@launch
             }
             this@PageTurner.forward = forward
             image = shot.asImageBitmap()
             covering = true
-            progress.snapTo(0f)
+            progress = 0f
             val waitFor = if (edge) CompletableDeferred<Unit>().also { ready = it } else null
             move()
             if (waitFor != null) withTimeoutOrNull(900) { waitFor.await() }
             // Give the book a couple of frames to draw the new page under the picture.
-            delay(if (edge) 60 else 34)
+            delay(if (edge) 60 else 40)
             covering = false
-            progress.animateTo(1f, tween(if (forward) 420 else 380, easing = TURN_EASING))
-            Log.d(TAG, "turn done")
+            progress = if (dragging) dragTarget else 0f
+        }
+    }
+
+    /** The finger has dragged the page [fraction] of the way across. */
+    fun drag(fraction: Float) {
+        dragTarget = fraction.coerceIn(0f, 1f)
+        if (image != null && !covering) progress = dragTarget
+    }
+
+    /**
+     * Lets go: finishes the turn ([commit]) or lays the page back down, with [undo] putting the
+     * book back on the page it was on. [move] is for a turn that couldn't be drawn.
+     */
+    fun end(scope: CoroutineScope, commit: Boolean, move: () -> Unit, undo: () -> Unit) {
+        dragging = false
+        val preparing = job
+        job = scope.launch {
+            preparing?.join()
+            if (unseen) {
+                if (commit) move()
+                clear()
+                return@launch
+            }
+            if (image == null) return@launch
+            val to = if (commit) 1f else 0f
+            val distance = kotlin.math.abs(to - progress)
+            animate(progress, to, animationSpec = tween((220 + 380 * distance).toInt(), easing = TURN_EASING)) { v, _ -> progress = v }
+            if (!commit) {
+                covering = true
+                undo()
+                delay(60)
+            }
+            Log.d(TAG, "turn done commit=$commit")
             clear()
         }
+    }
+
+    /** A whole turn on its own (a tap or a volume button). */
+    fun turn(scope: CoroutineScope, view: View, forward: Boolean, edge: Boolean, move: () -> Unit) {
+        start(scope, view, forward, edge, move)
+        end(scope, commit = true, move = move, undo = {})
     }
 
     private fun clear() {
         image = null
         covering = false
         ready = null
+        progress = 0f
         // Not recycled: the last frame drawn may still be using it; it's freed with the image.
     }
 
     companion object {
         private const val TAG = "FolioTurn"
-        private val TURN_EASING = CubicBezierEasing(0.3f, 0.0f, 0.2f, 1f)
+        private val TURN_EASING = CubicBezierEasing(0.35f, 0.0f, 0.25f, 1f)
     }
 }
 
@@ -146,7 +196,7 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
 
 /** How far the book itself is turned (going back it swings down from upright), for its graphicsLayer. */
 fun PageTurner.bookAngle(): Float =
-    if (image != null && !forward && !covering) -90f * (1f - progress.value) else 0f
+    if (image != null && !forward && !covering) -90f * (1f - progress) else 0f
 
 /** Drawn under the book: the page being left when going back, darkening as the new page lands. */
 @Composable
@@ -155,7 +205,7 @@ fun PageTurnUnder(turner: PageTurner) {
     if (turner.forward || turner.covering) return
     Box(Modifier.fillMaxSize()) {
         Image(image, contentDescription = null, contentScale = ContentScale.FillBounds, modifier = Modifier.fillMaxSize())
-        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.22f * turner.progress.value)))
+        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.22f * turner.progress)))
     }
 }
 
@@ -165,7 +215,7 @@ fun PageTurnOver(turner: PageTurner) {
     val image = turner.image ?: return
     if (!turner.forward && !turner.covering) {
         // Going back: shade the book's page as it swings down, lightest when it lands.
-        val p = turner.progress.value
+        val p = turner.progress
         Box(
             Modifier
                 .fillMaxSize()
@@ -178,7 +228,7 @@ fun PageTurnOver(turner: PageTurner) {
         )
         return
     }
-    val p = if (turner.covering) 0f else turner.progress.value
+    val p = if (turner.covering) 0f else turner.progress
     Box(Modifier.fillMaxSize()) {
         // The new page underneath brightens as the old one lifts off it.
         if (!turner.covering) Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.22f * (1f - p))))

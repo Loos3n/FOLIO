@@ -888,6 +888,8 @@ private fun BookWebView(
     val currentOnTap = rememberUpdatedState(onTap)
     val currentTurn = rememberUpdatedState(prefs.pageTurn)
     val turner = remember { PageTurner() }
+    // Which way the finger is turning the page (set from the page script's thread).
+    val dragForward = remember { java.util.concurrent.atomic.AtomicBoolean(true) }
     val turnScope = rememberCoroutineScope()
 
     val webView = remember {
@@ -934,9 +936,22 @@ private fun BookWebView(
                         // At the very start or end of the book there's nowhere to turn to.
                         val turns = !edge || (if (forward) vm.hasNextChapter() else vm.hasPrevChapter())
                         view.post {
-                            val move = { view.evaluateJavascript(if (forward) "window.folio && folio.next(true)" else "window.folio && folio.prev(true)", null) }
+                            val move = { view.step(forward) }
                             if (turns) turner.turn(turnScope, view, forward, edge, move) else move()
                         }
+                    },
+                    turnStarted = { forward, edge ->
+                        val turns = !edge || (if (forward) vm.hasNextChapter() else vm.hasPrevChapter())
+                        if (turns) {
+                            dragForward.set(forward)
+                            view.post { turner.start(turnScope, view, forward, edge) { view.step(forward) } }
+                        }
+                        turns
+                    },
+                    turnDragged = { f -> view.post { turner.drag(f) } },
+                    turnEnded = { commit ->
+                        val forward = dragForward.get()
+                        view.post { turner.end(turnScope, commit, move = { view.step(forward) }, undo = { view.step(!forward) }) }
                     },
                 ),
                 "FolioBridge",
@@ -1034,6 +1049,10 @@ private fun BookWebView(
         PageTurnOver(turner)
     }
 }
+
+/** Moves one page without the page script's own animation (the app is drawing the turn). */
+private fun WebView.step(forward: Boolean) =
+    evaluateJavascript(if (forward) "window.folio && folio.next(true)" else "window.folio && folio.prev(true)", null)
 
 /** Loads the chapter a request asks for, once (read-aloud may already have loaded it). */
 private fun FolioWebView.show(r: ChapterRequest, vm: ReaderViewModel) {

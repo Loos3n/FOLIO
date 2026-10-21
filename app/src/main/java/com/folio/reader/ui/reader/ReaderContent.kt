@@ -287,6 +287,8 @@ object ReaderContent {
           var anim = null;
           // How pages change: 'turn' (the app draws a page turning over), 'slide' or 'none'.
           var turnStyle = 'slide';
+          // While a finger turns the page: 'f' forward, 'b' back, 'x' nowhere to turn to.
+          var turning = null;
           var curX = 0;
 
           function width() { return window.innerWidth || root.clientWidth || 0; }
@@ -565,7 +567,7 @@ object ReaderContent {
             if (e.touches.length !== 1 || hasSelection()) { axis = 'none'; return; }
             if (anim) { cancelAnimationFrame(anim); anim = null; }
             sx = e.touches[0].clientX; sy = e.touches[0].clientY;
-            sScroll = page * width(); st = Date.now(); axis = null; moved = false;
+            sScroll = page * width(); st = Date.now(); axis = null; moved = false; turning = null;
           }, { passive: true });
           document.addEventListener('touchmove', function (e) {
             if (scrollMode || axis === 'none' || e.touches.length !== 1) return;
@@ -577,7 +579,15 @@ object ReaderContent {
             if (axis !== 'x') return;
             moved = true;
             e.preventDefault();
-            // Only sliding pages follow the finger; a turn or a cut happens when it lifts.
+            // A turning page follows the finger (the app draws it); a cut happens when it lifts.
+            if (turnStyle === 'turn' && bridge && bridge.turnStart) {
+              if (turning === null) {
+                var fwd = dx < 0;
+                turning = bridge.turnStart(fwd, fwd ? page >= lastPage() : page <= 0) ? (fwd ? 'f' : 'b') : 'x';
+              }
+              if (turning !== 'x') bridge.turnDrag(Math.max(0, turning === 'f' ? -dx : dx) / width());
+              return;
+            }
             if (turnStyle !== 'slide') return;
             var max = lastPage() * width();
             var x = sScroll - dx;
@@ -592,12 +602,23 @@ object ReaderContent {
             var dx = (e.changedTouches[0] ? e.changedTouches[0].clientX : sx) - sx;
             var v = dx / Math.max(1, Date.now() - st);
             var threshold = width() * 0.18;
+            if (turning === 'f' || turning === 'b') {
+              var d = turning === 'f' ? -dx : dx, vv = turning === 'f' ? -v : v;
+              var commit = d > threshold || vv > 0.35;
+              turning = null;
+              bridge.turnEnd(commit);
+              if (commit) userTurned();
+              return;
+            }
+            if (turning === 'x') { turning = null; return; }
             if (dx < -threshold || v < -0.35) folio.next();
             else if (dx > threshold || v > 0.35) folio.prev();
             else show(page, true);
           });
           document.addEventListener('touchcancel', function () {
             if (scrollMode) { auto.held = false; return; }
+            if (turning === 'f' || turning === 'b') bridge.turnEnd(false);
+            turning = null;
             if (axis === 'x') show(page, true);
             axis = null;
           });
@@ -1086,6 +1107,9 @@ class ReaderBridge(
     /** The reader tapped a footnote marker: the note's text, and the link to it. */
     private val footnoteTapped: (text: String, href: String) -> Unit = { _, _ -> },
     private val turnRequested: (forward: Boolean, edge: Boolean) -> Unit = { _, _ -> },
+    private val turnStarted: (forward: Boolean, edge: Boolean) -> Boolean = { _, _ -> false },
+    private val turnDragged: (fraction: Float) -> Unit = {},
+    private val turnEnded: (commit: Boolean) -> Unit = {},
 ) {
     @JavascriptInterface fun onPage(page: Int, count: Int, offset: Float, section: Int, sectionEnd: Int, charsLeft: Int, charAt: Int) =
         pageChanged(PageInfo(page, count, offset, section, sectionEnd, charsLeft, charAt))
@@ -1099,6 +1123,10 @@ class ReaderBridge(
     @JavascriptInterface fun onFootnote(text: String, href: String) = footnoteTapped(text, href)
     /** A page turn the app should draw: which way, and whether it crosses into another chapter. */
     @JavascriptInterface fun turnPage(forward: Boolean, edge: Boolean) = turnRequested(forward, edge)
+    /** A finger starts turning the page; false if there's nowhere to turn to. */
+    @JavascriptInterface fun turnStart(forward: Boolean, edge: Boolean): Boolean = turnStarted(forward, edge)
+    @JavascriptInterface fun turnDrag(fraction: Float) = turnDragged(fraction)
+    @JavascriptInterface fun turnEnd(commit: Boolean) = turnEnded(commit)
 }
 
 /** Where the reader is in a chapter, as the page script reports it. */
