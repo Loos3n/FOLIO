@@ -14,6 +14,9 @@ import android.view.View
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -21,15 +24,13 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.drawscope.clipRect
-import androidx.compose.ui.graphics.drawscope.withTransform
-import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -38,30 +39,24 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
-import kotlin.math.PI
-import kotlin.math.sin
 
 /**
- * Draws a page turning like a page of a book: the page folds back along a line that sweeps
- * across the screen, showing its paper back, with shadows either side of the fold.
+ * Draws a page turning over like a page of a book, hinged at the left edge.
  *
- * Only a picture of the page being left is needed. Forward, the picture is the page folding
- * away, with the book (already on the next page) showing past the fold. Back, the book (already
- * on the previous page) is the page folding in, laid over the picture of the page being left.
+ * Forward: a picture of the current page is laid over the book, which moves to the next
+ * page underneath, and the picture swings away. Back: the picture of the current page goes
+ * underneath and the book itself, now on the previous page, swings back down over it.
  */
 class PageTurner {
-    /** The picture of the page being left. */
+    /** The picture of the page being left, over the book (forward) or under it (back). */
     var image by mutableStateOf<ImageBitmap?>(null)
-        private set
-    /** The colour of the paper, for the back of the folding page. */
-    var paper by mutableStateOf(Color.White)
         private set
     var forward by mutableStateOf(true)
         private set
     /** Until the new page is drawn, the picture covers the book whichever way it's going. */
     var covering by mutableStateOf(false)
         private set
-    /** 0 = the old page lies flat, 1 = the new page lies flat. */
+    /** 0 = the old page lies flat, 1 = it has turned right over. */
     var progress by mutableFloatStateOf(0f)
         private set
 
@@ -85,7 +80,6 @@ class PageTurner {
     fun start(scope: CoroutineScope, view: View, forward: Boolean, edge: Boolean, move: () -> Unit) {
         job?.cancel()
         clear()
-        this.forward = forward
         dragging = true
         dragTarget = 0f
         unseen = false
@@ -96,7 +90,7 @@ class PageTurner {
                 unseen = true
                 return@launch
             }
-            paper = paperOf(shot)
+            this@PageTurner.forward = forward
             image = shot.asImageBitmap()
             covering = true
             progress = 0f
@@ -110,11 +104,9 @@ class PageTurner {
         }
     }
 
-    /** The finger has dragged the page [fraction] of the way across the screen. */
+    /** The finger has dragged the page [fraction] of the way across. */
     fun drag(fraction: Float) {
-        // Going forward the fold moves half as fast as the edge of the page the finger holds;
-        // going back the finger holds the fold itself.
-        dragTarget = (if (forward) fraction * 0.5f else fraction).coerceIn(0f, 1f)
+        dragTarget = fraction.coerceIn(0f, 1f)
         if (image != null && !covering) progress = dragTarget
     }
 
@@ -135,8 +127,7 @@ class PageTurner {
             if (image == null) return@launch
             val to = if (commit) 1f else 0f
             val distance = kotlin.math.abs(to - progress)
-            // A whole turn takes most of a second however fast the flick, so it is always seen.
-            animate(progress, to, animationSpec = tween((260 + 560 * distance).toInt(), easing = TURN_EASING)) { v, _ -> progress = v }
+            animate(progress, to, animationSpec = tween((420 + 480 * distance).toInt(), easing = TURN_EASING)) { v, _ -> progress = v }
             if (!commit) {
                 covering = true
                 undo()
@@ -163,14 +154,9 @@ class PageTurner {
 
     companion object {
         private const val TAG = "FolioTurn"
-        private val TURN_EASING = CubicBezierEasing(0.3f, 0.1f, 0.25f, 1f)
+        private val TURN_EASING = CubicBezierEasing(0.35f, 0.0f, 0.25f, 1f)
     }
 }
-
-/** The page's paper colour, from just inside its top-left corner. */
-private fun paperOf(shot: Bitmap): Color = runCatching {
-    Color(shot.getPixel((shot.width / 40).coerceIn(0, shot.width - 1), (shot.height / 80).coerceIn(0, shot.height - 1)))
-}.getOrDefault(Color.White)
 
 /** The page as it's shown on screen right now (including what the GPU draws), or null. */
 private suspend fun capture(view: View): Bitmap? {
@@ -208,80 +194,65 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
     else -> null
 }
 
-/**
- * Drawn over the book. The fold is a vertical line at x = [fold]; the page turning lies flat to
- * the left of where its folded part ends, the folded part (its back) sits between there and the
- * fold, and the page underneath shows to the right of the fold.
- */
+/** How far the book itself is turned (going back it swings down from upright), for its graphicsLayer. */
+fun PageTurner.bookAngle(): Float =
+    if (image != null && !forward && !covering) -90f * (1f - progress) else 0f
+
+/** Drawn under the book: the page being left when going back, darkening as the new page lands. */
+@Composable
+fun PageTurnUnder(turner: PageTurner) {
+    val image = turner.image ?: return
+    if (turner.forward || turner.covering) return
+    Box(Modifier.fillMaxSize()) {
+        Image(image, contentDescription = null, contentScale = ContentScale.FillBounds, modifier = Modifier.fillMaxSize())
+        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.22f * turner.progress)))
+    }
+}
+
+/** Drawn over the book: the page swinging away going forward (or covering the book while it moves). */
 @Composable
 fun PageTurnOver(turner: PageTurner) {
     val image = turner.image ?: return
-    val covering = turner.covering
-    val forward = turner.forward
-    val p = turner.progress
-    val paper = turner.paper
-    // Compose's Canvas (android.graphics.Canvas is imported for taking the picture).
-    androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
-        val w = size.width
-        val h = size.height
-        val dst = IntSize(w.toInt(), h.toInt())
-        if (covering) {
-            drawImage(image, dstSize = dst)
-            return@Canvas
-        }
-        // How far the fold has swept, from the right edge (0) to the left edge (1).
-        val swept = if (forward) p else 1f - p
-        val fold = w * (1f - swept)
-        val flapEdge = 2f * fold - w
-        // The picture: the flat part of the page turning (forward) or the page underneath (back).
-        if (forward) {
-            if (flapEdge > 0f) clipRect(0f, 0f, flapEdge, h) { drawImage(image, dstSize = dst) }
-        } else {
-            clipRect(fold, 0f, w, h) { drawImage(image, dstSize = dst) }
-        }
-        val strength = sin(PI.toFloat() * swept).coerceAtLeast(0f)
-        // The page underneath darkens next to the fold, where the turning page overhangs it.
-        val shadow = (w * 0.06f + w * 0.12f * strength).coerceAtMost(w - fold)
-        if (shadow > 1f) {
-            drawRect(
-                Brush.horizontalGradient(
-                    0f to Color.Black.copy(alpha = 0.38f * strength + 0.06f),
-                    1f to Color.Transparent,
-                    startX = fold, endX = fold + shadow,
-                ),
-                topLeft = Offset(fold, 0f), size = Size(shadow, h),
-            )
-        }
-        // The folded part's edge casts a soft shadow on the flat part of the page.
-        if (flapEdge > 0f) {
-            val cast = (w * 0.05f).coerceAtMost(flapEdge)
-            drawRect(
-                Brush.horizontalGradient(
-                    0f to Color.Transparent,
-                    1f to Color.Black.copy(alpha = 0.22f * strength),
-                    startX = flapEdge - cast, endX = flapEdge,
-                ),
-                topLeft = Offset(flapEdge - cast, 0f), size = Size(cast, h),
-            )
-        }
-        // The back of the folding page: paper, with the print showing through faintly, reversed.
-        val left = flapEdge.coerceAtLeast(0f)
-        if (fold - left > 0.5f) {
-            clipRect(left, 0f, fold, h) {
-                drawRect(paper)
-                withTransform({ scale(-1f, 1f, pivot = Offset(fold, 0f)) }) {
-                    drawImage(image, dstSize = dst, alpha = 0.12f)
+    if (!turner.forward && !turner.covering) {
+        // Going back: shade the book's page as it swings down, lightest when it lands.
+        val p = turner.progress
+        Box(
+            Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    transformOrigin = TransformOrigin(0f, 0.5f)
+                    rotationY = turner.bookAngle()
+                    cameraDistance = 22f * density
                 }
-                drawRect(
-                    Brush.horizontalGradient(
-                        0f to Color.White.copy(alpha = 0.10f),
-                        0.6f to Color.Transparent,
-                        1f to Color.Black.copy(alpha = 0.20f),
-                        startX = flapEdge, endX = fold,
+                .background(Color.Black.copy(alpha = 0.28f * (1f - p))),
+        )
+        return
+    }
+    val p = if (turner.covering) 0f else turner.progress
+    Box(Modifier.fillMaxSize()) {
+        // The new page underneath brightens as the old one lifts off it.
+        if (!turner.covering) Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.22f * (1f - p))))
+        Box(
+            Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    transformOrigin = TransformOrigin(0f, 0.5f)
+                    rotationY = -90f * p
+                    cameraDistance = 22f * density
+                },
+        ) {
+            Image(image, contentDescription = null, contentScale = ContentScale.FillBounds, modifier = Modifier.fillMaxSize())
+            // Light catches the page as it turns: a soft shade from the spine outwards.
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.horizontalGradient(
+                            0f to Color.Black.copy(alpha = 0.05f * p),
+                            1f to Color.Black.copy(alpha = 0.35f * p),
+                        ),
                     ),
-                    topLeft = Offset(left, 0f), size = Size(fold - left, h),
-                )
-            }
+            )
         }
     }
 }

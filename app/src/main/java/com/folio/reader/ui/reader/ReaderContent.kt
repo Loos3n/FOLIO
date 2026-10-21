@@ -538,6 +538,21 @@ object ReaderContent {
 
           // Swipe between pages. The page follows the finger, then settles.
           var sx = 0, sy = 0, sScroll = 0, st = 0, axis = null, moved = false;
+          // Recent finger positions [x, time], for how fast it was moving when it lifted.
+          var trail = [];
+          function track(x) {
+            var now = Date.now();
+            trail.push([x, now]);
+            while (trail.length > 2 && now - trail[0][1] > 100) trail.shift();
+          }
+          // Pixels per ms over the last tenth of a second (a pause before the flick doesn't count).
+          function speed(x) {
+            var now = Date.now(), first = trail.length ? trail[0] : [sx, st];
+            return (x - first[0]) / Math.max(1, now - first[1]);
+          }
+          // Whether a swipe that moved [d] px towards the turn, last going at [v], should turn the page:
+          // a long drag, or any short flick that's still heading that way.
+          function turns(d, v) { return d > width() * 0.18 || (d > 12 && v > 0.1); }
           var startY = 0, pulled = false;
           function hasSelection() { return String(window.getSelection() || '').length > 0; }
           // Scrolling mode uses the WebView's own scrolling; these only watch for a pull
@@ -567,11 +582,12 @@ object ReaderContent {
             if (e.touches.length !== 1 || hasSelection()) { axis = 'none'; return; }
             if (anim) { cancelAnimationFrame(anim); anim = null; }
             sx = e.touches[0].clientX; sy = e.touches[0].clientY;
-            sScroll = page * width(); st = Date.now(); axis = null; moved = false; turning = null;
+            sScroll = page * width(); st = Date.now(); axis = null; moved = false; turning = null; trail = [[sx, st]];
           }, { passive: true });
           document.addEventListener('touchmove', function (e) {
             if (scrollMode || axis === 'none' || e.touches.length !== 1) return;
             var dx = e.touches[0].clientX - sx, dy = e.touches[0].clientY - sy;
+            track(e.touches[0].clientX);
             if (axis === null) {
               if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
               axis = Math.abs(dx) >= Math.abs(dy) ? 'x' : 'y';
@@ -599,20 +615,18 @@ object ReaderContent {
             if (scrollMode) return;
             if (axis !== 'x') { axis = null; return; }
             axis = null;
-            var dx = (e.changedTouches[0] ? e.changedTouches[0].clientX : sx) - sx;
-            var v = dx / Math.max(1, Date.now() - st);
-            var threshold = width() * 0.18;
+            var x = e.changedTouches[0] ? e.changedTouches[0].clientX : sx;
+            var dx = x - sx, v = speed(x);
             if (turning === 'f' || turning === 'b') {
-              var d = turning === 'f' ? -dx : dx, vv = turning === 'f' ? -v : v;
-              var commit = d > threshold || vv > 0.35;
+              var commit = turning === 'f' ? turns(-dx, -v) : turns(dx, v);
               turning = null;
               bridge.turnEnd(commit);
               if (commit) userTurned();
               return;
             }
             if (turning === 'x') { turning = null; return; }
-            if (dx < -threshold || v < -0.35) folio.next();
-            else if (dx > threshold || v > 0.35) folio.prev();
+            if (turns(-dx, -v)) folio.next();
+            else if (turns(dx, v)) folio.prev();
             else show(page, true);
           });
           document.addEventListener('touchcancel', function () {
