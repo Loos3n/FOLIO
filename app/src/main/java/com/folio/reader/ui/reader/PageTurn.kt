@@ -4,7 +4,9 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.Rect
+import android.util.Log
 import android.os.Handler
 import android.os.Looper
 import android.view.PixelCopy
@@ -72,6 +74,7 @@ class PageTurner {
         clear()
         job = scope.launch {
             val shot = capture(view)
+            Log.d(TAG, "turn forward=$forward edge=$edge captured=${shot != null}")
             if (shot == null) {
                 move()
                 return@launch
@@ -87,6 +90,7 @@ class PageTurner {
             delay(if (edge) 60 else 34)
             covering = false
             progress.animateTo(1f, tween(if (forward) 420 else 380, easing = TURN_EASING))
+            Log.d(TAG, "turn done")
             clear()
         }
     }
@@ -99,6 +103,7 @@ class PageTurner {
     }
 
     companion object {
+        private const val TAG = "FolioTurn"
         private val TURN_EASING = CubicBezierEasing(0.3f, 0.0f, 0.2f, 1f)
     }
 }
@@ -121,8 +126,16 @@ private suspend fun capture(view: View): Bitmap? {
             )
         }.onFailure { if (cont.isActive) cont.resume(false) }
     }
-    if (!ok) bitmap.recycle()
-    return if (ok) bitmap else null
+    if (ok) return bitmap
+    // Some phones refuse a copy of the window; draw the view ourselves instead.
+    Log.d("FolioTurn", "PixelCopy failed; drawing the view instead")
+    return runCatching {
+        view.draw(Canvas(bitmap))
+        bitmap
+    }.getOrElse {
+        bitmap.recycle()
+        null
+    }
 }
 
 private tailrec fun Context.findActivity(): Activity? = when (this) {

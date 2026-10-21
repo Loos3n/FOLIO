@@ -2,6 +2,10 @@ name: UI check
 # Run by hand only (Actions tab, "Run workflow"): new builds are tested on a phone.
 on:
   workflow_dispatch:
+    inputs:
+      parts:
+        description: Parts of the tour to run, as a JSON list
+        default: '["reading","listening","freebooks","files"]'
 permissions:
   contents: write
 jobs:
@@ -10,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        part: [reading, listening, freebooks, files]
+        part: ${{ fromJSON(inputs.parts) }}
     name: emulator (${{ matrix.part }})
     runs-on: ubuntu-latest
     timeout-minutes: 40
