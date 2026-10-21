@@ -89,6 +89,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import com.folio.reader.FolioApp
 import com.folio.reader.audio.ListenState
@@ -131,6 +132,10 @@ fun LibraryScreen(
     val sort by vm.sort.collectAsStateWithLifecycle()
     val collection by vm.collection.collectAsStateWithLifecycle()
     val collections by vm.collections.collectAsStateWithLifecycle()
+    val display by vm.display.collectAsStateWithLifecycle()
+    val shelfView = display.shelfView
+    val shelfWidth = LocalConfiguration.current.screenWidthDp - 52
+    val shelves = remember(books, shelfView, shelfWidth) { if (shelfView) shelfRows(books, shelfWidth) else emptyList() }
     var showStats by remember { mutableStateOf(false) }
     var showDisplay by remember { mutableStateOf(false) }
     var showWords by remember { mutableStateOf(false) }
@@ -235,6 +240,8 @@ fun LibraryScreen(
                         importing = importing,
                         sort = sort,
                         onSort = vm::setSort,
+                        shelfView = shelfView,
+                        onShelfView = { on -> vm.updateDisplay { it.copy(shelfView = on) } },
                         onStats = { showStats = true },
                         onDisplay = { showDisplay = true },
                         onWords = { showWords = true },
@@ -274,7 +281,21 @@ fun LibraryScreen(
                         )
                     }
                 }
-                items(books, key = { it.id }) { book ->
+                if (shelfView) {
+                    shelves.forEachIndexed { index, row ->
+                        item(span = { GridItemSpan(maxLineSpan) }, key = "shelf-" + row.first().id) {
+                            ShelfRow(
+                                books = row,
+                                vm = vm,
+                                onOpen = { onOpen(it.id) },
+                                onDelete = { pendingDelete = it },
+                                onCollections = { editingCollections = it },
+                                onEdit = { editingDetails = it },
+                                modifier = Modifier.animateItem().entrance(index, intro),
+                            )
+                        }
+                    }
+                } else items(books, key = { it.id }) { book ->
                     val index = books.indexOf(book)
                     BookTile(
                         book = book,
@@ -322,7 +343,6 @@ fun LibraryScreen(
         )
     }
     if (showDisplay) {
-        val display by vm.display.collectAsStateWithLifecycle()
         SettingsSheet(
             settings = display,
             scrollMode = display.scrollDefault,
@@ -437,6 +457,8 @@ private fun Header(
     importing: Boolean,
     sort: SortOrder,
     onSort: (SortOrder) -> Unit,
+    shelfView: Boolean,
+    onShelfView: (Boolean) -> Unit,
     onStats: () -> Unit,
     onDisplay: () -> Unit,
     onWords: () -> Unit,
@@ -517,6 +539,13 @@ private fun Header(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f),
             )
+            IconButton(onClick = { onShelfView(!shelfView) }) {
+                Icon(
+                    if (shelfView) LibraryIcons.Grid else LibraryIcons.Shelf,
+                    contentDescription = if (shelfView) "Show covers" else "Show as a bookshelf",
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
             Box {
                 TextButton(onClick = { menuOpen = true }) { Text(sort.label) }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
@@ -741,7 +770,6 @@ private fun BookTile(
     modifier: Modifier = Modifier,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
-    val context = LocalContext.current
     val grow = rememberGrow(book.progress)
     Column(modifier) {
         Box {
@@ -847,54 +875,79 @@ private fun BookTile(
                         modifier = Modifier.size(20.dp),
                     )
                 }
-                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }, offset = DpOffset((-8).dp, 0.dp)) {
-                        if (book.lastOpenedAt > 0) {
-                            DropdownMenuItem(
-                                text = { Text("Mark as unread") },
-                                leadingIcon = { Icon(Icons.Filled.Refresh, contentDescription = null) },
-                                onClick = {
-                                    menuOpen = false
-                                    vm.markUnread(book)
-                                },
-                            )
-                        }
-                        DropdownMenuItem(
-                            text = { Text("Details and rating…") },
-                            leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
-                            onClick = {
-                                menuOpen = false
-                                onEdit()
-                            },
-                        )
-                        if (book.highlights.isNotEmpty()) {
-                            DropdownMenuItem(
-                                text = { Text("Share highlights") },
-                                leadingIcon = { Icon(Icons.Filled.Share, contentDescription = null) },
-                                onClick = {
-                                    menuOpen = false
-                                    HighlightExport.share(context, book)
-                                },
-                            )
-                        }
-                        DropdownMenuItem(
-                            text = { Text("Collections…") },
-                            leadingIcon = { Icon(LibraryIcons.Collection, contentDescription = null) },
-                            onClick = {
-                                menuOpen = false
-                                onCollections()
-                            },
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Remove from library") },
-                            leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null) },
-                            onClick = {
-                                menuOpen = false
-                                onDelete()
-                            },
-                        )
-                    }
+                BookMenu(
+                    book = book,
+                    vm = vm,
+                    expanded = menuOpen,
+                    onDismiss = { menuOpen = false },
+                    onDelete = onDelete,
+                    onCollections = onCollections,
+                    onEdit = onEdit,
+                    offset = DpOffset((-8).dp, 0.dp),
+                )
             }
         }
+    }
+}
+
+/** A book's menu: from the ⋮ under its cover, a long-press on the cover, or a long-press on its spine. */
+@Composable
+internal fun BookMenu(
+    book: Book,
+    vm: LibraryViewModel,
+    expanded: Boolean,
+    onDismiss: () -> Unit,
+    onDelete: () -> Unit,
+    onCollections: () -> Unit,
+    onEdit: () -> Unit,
+    offset: DpOffset = DpOffset(0.dp, 0.dp),
+) {
+    val context = LocalContext.current
+    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss, offset = offset) {
+        if (book.lastOpenedAt > 0) {
+            DropdownMenuItem(
+                text = { Text("Mark as unread") },
+                leadingIcon = { Icon(Icons.Filled.Refresh, contentDescription = null) },
+                onClick = {
+                    onDismiss()
+                    vm.markUnread(book)
+                },
+            )
+        }
+        DropdownMenuItem(
+            text = { Text("Details and rating…") },
+            leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
+            onClick = {
+                onDismiss()
+                onEdit()
+            },
+        )
+        if (book.highlights.isNotEmpty()) {
+            DropdownMenuItem(
+                text = { Text("Share highlights") },
+                leadingIcon = { Icon(Icons.Filled.Share, contentDescription = null) },
+                onClick = {
+                    onDismiss()
+                    HighlightExport.share(context, book)
+                },
+            )
+        }
+        DropdownMenuItem(
+            text = { Text("Collections…") },
+            leadingIcon = { Icon(LibraryIcons.Collection, contentDescription = null) },
+            onClick = {
+                onDismiss()
+                onCollections()
+            },
+        )
+        DropdownMenuItem(
+            text = { Text("Remove from library") },
+            leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null) },
+            onClick = {
+                onDismiss()
+                onDelete()
+            },
+        )
     }
 }
 

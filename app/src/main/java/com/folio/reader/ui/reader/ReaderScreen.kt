@@ -4,7 +4,6 @@ package com.folio.reader.ui.reader
 
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.Animatable
-import androidx.compose.ui.graphics.TransformOrigin
 import com.folio.reader.data.PageTurn
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.horizontalScroll
@@ -1035,17 +1034,7 @@ private fun BookWebView(
     }
 
     Box(modifier) {
-        PageTurnUnder(turner)
-        AndroidView(
-            factory = { webView },
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer {
-                    transformOrigin = TransformOrigin(0f, 0.5f)
-                    rotationY = turner.bookAngle()
-                    cameraDistance = 22f * density
-                },
-        )
+        AndroidView(factory = { webView }, modifier = Modifier.fillMaxSize())
         PageTurnOver(turner)
     }
 }

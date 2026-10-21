@@ -1,5 +1,6 @@
 package com.folio.reader.ui.library
 
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.LruCache
 import androidx.compose.foundation.Image
@@ -19,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -58,6 +60,29 @@ private val placeholderPalettes = listOf(
     Color(0xFF6D2E46) to Color(0xFFECE2D0),
     Color(0xFF22333B) to Color(0xFFC6AC8F),
 )
+
+/** The main colour of a book's cover (or of its designed stand-in), for its spine on a shelf. */
+internal suspend fun coverTone(title: String, file: File?): Color {
+    file?.let { f ->
+        CoverTones[f.path]?.let { return it }
+        val tone = withContext(Dispatchers.IO) {
+            runCatching {
+                val bitmap = CoverCache.load(f)?.asAndroidBitmap() ?: return@runCatching null
+                Color(Bitmap.createScaledBitmap(bitmap, 1, 1, true).getPixel(0, 0))
+            }.getOrNull()
+        }
+        if (tone != null) {
+            CoverTones[f.path] = tone
+            return tone
+        }
+    }
+    return placeholderTone(title)
+}
+
+/** The stand-in cover's colour, known without loading anything. */
+internal fun placeholderTone(title: String): Color = placeholderPalettes[title.hashCode().absoluteValue % placeholderPalettes.size].first
+
+private val CoverTones = java.util.concurrent.ConcurrentHashMap<String, Color>()
 
 @Composable
 fun BookCover(title: String, author: String?, file: File?, modifier: Modifier = Modifier) {
