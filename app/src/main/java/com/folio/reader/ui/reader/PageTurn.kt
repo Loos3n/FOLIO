@@ -127,7 +127,7 @@ class PageTurner {
             if (image == null) return@launch
             val to = if (commit) 1f else 0f
             val distance = kotlin.math.abs(to - progress)
-            animate(progress, to, animationSpec = tween((220 + 380 * distance).toInt(), easing = TURN_EASING)) { v, _ -> progress = v }
+            animate(progress, to, animationSpec = tween((420 + 480 * distance).toInt(), easing = TURN_EASING)) { v, _ -> progress = v }
             if (!commit) {
                 covering = true
                 undo()
