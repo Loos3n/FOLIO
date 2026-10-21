@@ -114,6 +114,18 @@ class ReaderViewModel(private val app: FolioApp, private val bookId: String) : V
         _state.update { it.copy(error = "Part of this book couldn't be shown safely, so it was closed.") }
     }
 
+    /** The book as saved in the library right now. */
+    fun book() = library.get(bookId)
+
+    /** Keeps a looked-up word, with the sentence around it, in the word list. */
+    fun saveWord(word: String, sentence: String) = app.words.add(word, sentence, bookId, book()?.title.orEmpty())
+
+    fun saveMeaning(term: String, definition: Definition) {
+        val m = definition.meanings.firstOrNull() ?: return
+        val text = m.definitions.firstOrNull()?.first ?: return
+        app.words.setMeaning(term, m.partOfSpeech.ifBlank { null }, text)
+    }
+
     init {
         viewModelScope.launch {
             val entry = library.get(bookId)

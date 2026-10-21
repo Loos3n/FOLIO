@@ -20,6 +20,13 @@ enum class ReaderFont(val label: String, val css: String?) {
     Atkinson("Atkinson", "'Folio Atkinson', 'Roboto', sans-serif"),
 }
 
+/** How a page changes in page mode. */
+enum class PageTurn(val label: String, val js: String) {
+    Turn("Turn", "turn"),
+    Slide("Slide", "slide"),
+    Off("None", "none"),
+}
+
 data class ReaderSettings(
     /** WebView text zoom in percent. */
     val textZoom: Int = 110,
@@ -47,6 +54,17 @@ data class ReaderSettings(
     val charsPerMinute: Float = 0f,
     /** Minutes of reading (or listening) to aim for each day; 0 = no goal. */
     val dailyGoalMinutes: Int = 0,
+    /** Screen brightness while reading, 0..1; below 0 follows the phone. */
+    val brightness: Float = -1f,
+    /** Warm (amber) tint over the page, 0 = off .. 1 = strongest. */
+    val warmth: Float = 0f,
+    /** Tapping near the left or right edge turns the page (otherwise only swipes do). */
+    val tapToTurn: Boolean = false,
+    /** A font the reader added (its file name in the fonts folder), used instead of [font]; null = none. */
+    val customFont: String? = null,
+    /** Books to finish this year; 0 = no goal. */
+    val yearlyBookGoal: Int = 0,
+    val pageTurn: PageTurn = PageTurn.Turn,
 ) {
     fun resolvedTheme(systemDark: Boolean): ReaderTheme =
         theme ?: if (systemDark) ReaderTheme.Dark else ReaderTheme.Light
@@ -77,6 +95,12 @@ class SettingsRepository(context: Context) {
             .putFloat("autoScrollSpeed", next.autoScrollSpeed)
             .putFloat("charsPerMinute", next.charsPerMinute)
             .putInt("dailyGoalMinutes", next.dailyGoalMinutes)
+            .putFloat("brightness", next.brightness)
+            .putFloat("warmth", next.warmth)
+            .putBoolean("tapToTurn", next.tapToTurn)
+            .putString("customFont", next.customFont)
+            .putInt("yearlyBookGoal", next.yearlyBookGoal)
+            .putString("pageTurn", next.pageTurn.name)
             .apply()
     }
 
@@ -127,6 +151,12 @@ class SettingsRepository(context: Context) {
             autoScrollSpeed = prefs.getFloat("autoScrollSpeed", d.autoScrollSpeed),
             charsPerMinute = prefs.getFloat("charsPerMinute", d.charsPerMinute),
             dailyGoalMinutes = prefs.getInt("dailyGoalMinutes", d.dailyGoalMinutes),
+            brightness = prefs.getFloat("brightness", d.brightness),
+            warmth = prefs.getFloat("warmth", d.warmth),
+            tapToTurn = prefs.getBoolean("tapToTurn", d.tapToTurn),
+            customFont = prefs.getString("customFont", null),
+            yearlyBookGoal = prefs.getInt("yearlyBookGoal", d.yearlyBookGoal),
+            pageTurn = prefs.getString("pageTurn", null)?.let { n -> PageTurn.entries.firstOrNull { it.name == n } } ?: d.pageTurn,
         )
     }
 }

@@ -2,6 +2,14 @@
 
 package com.folio.reader.ui.library
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.runtime.State
+import kotlinx.coroutines.delay
+import androidx.compose.ui.graphics.graphicsLayer
+import com.folio.reader.ui.reader.SettingsSheet
+import com.folio.reader.ui.reader.ReaderIcons
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -42,6 +50,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import com.folio.reader.data.HighlightExport
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Check
@@ -97,6 +107,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.folio.reader.data.AutoBackup
 import com.folio.reader.data.Backup
 import com.folio.reader.data.Book
 import java.util.Calendar
@@ -121,6 +132,12 @@ fun LibraryScreen(
     val collection by vm.collection.collectAsStateWithLifecycle()
     val collections by vm.collections.collectAsStateWithLifecycle()
     var showStats by remember { mutableStateOf(false) }
+    var showDisplay by remember { mutableStateOf(false) }
+    var showWords by remember { mutableStateOf(false) }
+    var showAutoBackup by remember { mutableStateOf(false) }
+    val autoBackupTarget = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(Backup.MIME)) { uri: Uri? ->
+        uri?.let(vm::turnOnAutoBackup)
+    }
     var editingCollections by remember { mutableStateOf<Book?>(null) }
     var editingDetails by remember { mutableStateOf<Book?>(null) }
     val preparing by vm.preparing.collectAsStateWithLifecycle()
@@ -157,6 +174,12 @@ fun LibraryScreen(
     }
 
     val gridState = rememberLazyGridState()
+    // Books arrive one after another when the library opens; later changes just move them.
+    var intro by remember { mutableStateOf(true) }
+    LaunchedEffect(Unit) {
+        delay(1_500)
+        intro = false
+    }
     val fabExpanded by remember { derivedStateOf { gridState.firstVisibleItemIndex < 2 } }
 
     Scaffold(
@@ -213,6 +236,9 @@ fun LibraryScreen(
                         sort = sort,
                         onSort = vm::setSort,
                         onStats = { showStats = true },
+                        onDisplay = { showDisplay = true },
+                        onWords = { showWords = true },
+                        onAutoBackup = { showAutoBackup = true },
                         onFindFree = onFindFree,
                         onBackUp = backUp,
                         onRestore = restore,
@@ -249,6 +275,7 @@ fun LibraryScreen(
                     }
                 }
                 items(books, key = { it.id }) { book ->
+                    val index = books.indexOf(book)
                     BookTile(
                         book = book,
                         vm = vm,
@@ -257,7 +284,7 @@ fun LibraryScreen(
                         onCollections = { editingCollections = book },
                         onEdit = { editingDetails = book },
                         preparing = preparing[book.id],
-                        modifier = Modifier.animateItem(),
+                        modifier = Modifier.animateItem().entrance(index, intro),
                     )
                 }
                 if (query.isBlank()) {
@@ -294,10 +321,43 @@ fun LibraryScreen(
             confirmButton = { TextButton(onClick = { notice = null }) { Text("OK") } },
         )
     }
+    if (showDisplay) {
+        val display by vm.display.collectAsStateWithLifecycle()
+        SettingsSheet(
+            settings = display,
+            scrollMode = display.scrollDefault,
+            onScrollMode = { on -> vm.updateDisplay { it.copy(scrollDefault = on) } },
+            onChange = vm::updateDisplay,
+            onDismiss = { showDisplay = false },
+        )
+    }
     if (showStats) {
         val stats by vm.stats.collectAsStateWithLifecycle()
         val goal by vm.goalMinutes.collectAsStateWithLifecycle()
-        StatsSheet(stats = stats, books = allBooks, goalMinutes = goal, onSetGoal = vm::setGoal, onDismiss = { showStats = false })
+        val yearGoal by vm.yearGoal.collectAsStateWithLifecycle()
+        StatsSheet(
+            stats = stats,
+            books = allBooks,
+            goalMinutes = goal,
+            onSetGoal = vm::setGoal,
+            yearGoal = yearGoal,
+            onSetYearGoal = vm::setYearGoal,
+            onDismiss = { showStats = false },
+        )
+    }
+    if (showAutoBackup) {
+        val state by vm.autoBackup.collectAsStateWithLifecycle()
+        AutoBackupDialog(
+            state = state,
+            onChoose = { autoBackupTarget.launch(AutoBackup.FILE_NAME) },
+            onNow = vm::autoBackupNow,
+            onOff = vm::turnOffAutoBackup,
+            onDismiss = { showAutoBackup = false },
+        )
+    }
+    if (showWords) {
+        val words by vm.words.collectAsStateWithLifecycle()
+        WordListSheet(words = words, onRemove = vm::removeWord, onDismiss = { showWords = false })
     }
     editingCollections?.let { book ->
         CollectionsDialog(
@@ -315,8 +375,9 @@ fun LibraryScreen(
         EditDetailsDialog(
             book = book,
             cover = vm.coverFile(book),
-            onSave = { title, author, cover, removeCover ->
-                vm.editDetails(book, title, author, cover, removeCover)
+            seriesNames = vm.seriesNames.collectAsStateWithLifecycle().value,
+            onSave = { details ->
+                vm.editDetails(book, details)
                 editingDetails = null
             },
             onDismiss = { editingDetails = null },
@@ -340,6 +401,29 @@ fun LibraryScreen(
     }
 }
 
+/** A progress value that fills from empty when first shown, then follows changes. */
+@Composable
+internal fun rememberGrow(target: Float): State<Float> {
+    val value = remember { Animatable(0f) }
+    LaunchedEffect(target) { value.animateTo(target, tween(700, easing = FastOutSlowInEasing)) }
+    return value.asState()
+}
+
+/** Fades and lifts an item in when the library first appears, one after another. */
+@Composable
+private fun Modifier.entrance(index: Int, play: Boolean): Modifier {
+    if (!play) return this
+    val shown = remember { Animatable(0f) }
+    LaunchedEffect(Unit) {
+        delay(45L * index.coerceAtMost(12))
+        shown.animateTo(1f, tween(420, easing = FastOutSlowInEasing))
+    }
+    return this.graphicsLayer {
+        alpha = shown.value
+        translationY = (1f - shown.value) * 28.dp.toPx()
+    }
+}
+
 private fun greeting(): String = when (Calendar.getInstance().get(Calendar.HOUR_OF_DAY)) {
     in 5..11 -> "Good morning"
     in 12..16 -> "Good afternoon"
@@ -354,6 +438,9 @@ private fun Header(
     sort: SortOrder,
     onSort: (SortOrder) -> Unit,
     onStats: () -> Unit,
+    onDisplay: () -> Unit,
+    onWords: () -> Unit,
+    onAutoBackup: () -> Unit,
     onFindFree: () -> Unit,
     onBackUp: () -> Unit,
     onRestore: () -> Unit,
@@ -361,46 +448,34 @@ private fun Header(
     var menuOpen by remember { mutableStateOf(false) }
     var moreOpen by remember { mutableStateOf(false) }
     Column {
-        Row(verticalAlignment = Alignment.Bottom) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    greeting(),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-                Text("Your library", style = MaterialTheme.typography.displaySmall)
-                Text(
-                    if (count == 1) "1 book" else "$count books",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+        // Greeting and actions on one line, so the title below gets the full width.
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                greeting(),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(onClick = onDisplay) {
+                Icon(ReaderIcons.Brightness, contentDescription = "Display and light", tint = MaterialTheme.colorScheme.primary)
             }
             IconButton(onClick = onStats) {
                 Icon(LibraryIcons.Stats, contentDescription = "Reading stats", tint = MaterialTheme.colorScheme.primary)
-            }
-            Box {
-                TextButton(onClick = { menuOpen = true }) { Text(sort.label) }
-                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                    SortOrder.entries.forEach { option ->
-                        DropdownMenuItem(
-                            text = { Text(option.label) },
-                            leadingIcon = {
-                                if (option == sort) Icon(Icons.Filled.Check, contentDescription = null)
-                                else Spacer(Modifier.size(24.dp))
-                            },
-                            onClick = {
-                                onSort(option)
-                                menuOpen = false
-                            },
-                        )
-                    }
-                }
             }
             Box {
                 IconButton(onClick = { moreOpen = true }) {
                     Icon(Icons.Filled.MoreVert, contentDescription = "More options", tint = MaterialTheme.colorScheme.primary)
                 }
                 DropdownMenu(expanded = moreOpen, onDismissRequest = { moreOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Word list") },
+                        onClick = {
+                            moreOpen = false
+                            onWords()
+                        },
+                    )
                     DropdownMenuItem(
                         text = { Text("Find free books") },
                         onClick = {
@@ -417,6 +492,13 @@ private fun Header(
                         },
                     )
                     DropdownMenuItem(
+                        text = { Text("Automatic backup…") },
+                        onClick = {
+                            moreOpen = false
+                            onAutoBackup()
+                        },
+                    )
+                    DropdownMenuItem(
                         text = { Text("Restore from backup") },
                         enabled = !importing,
                         onClick = {
@@ -424,6 +506,33 @@ private fun Header(
                             onRestore()
                         },
                     )
+                }
+            }
+        }
+        Text("Your library", style = MaterialTheme.typography.displaySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                if (count == 1) "1 book" else "$count books",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            Box {
+                TextButton(onClick = { menuOpen = true }) { Text(sort.label) }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    SortOrder.entries.forEach { option ->
+                        DropdownMenuItem(
+                            text = { Text(option.label) },
+                            leadingIcon = {
+                                if (option == sort) Icon(Icons.Filled.Check, contentDescription = null)
+                                else Spacer(Modifier.size(24.dp))
+                            },
+                            onClick = {
+                                onSort(option)
+                                menuOpen = false
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -514,6 +623,7 @@ private fun Modifier.layoutBleed(bleed: Dp) = this.then(
 
 @Composable
 private fun ContinueCard(book: Book, vm: LibraryViewModel, onOpen: (String) -> Unit, single: Boolean) {
+    val grow = rememberGrow(book.progress)
     val scheme = MaterialTheme.colorScheme
     Surface(
         onClick = { onOpen(book.id) },
@@ -557,7 +667,7 @@ private fun ContinueCard(book: Book, vm: LibraryViewModel, onOpen: (String) -> U
                     }
                     Spacer(Modifier.height(14.dp))
                     LinearProgressIndicator(
-                        progress = { book.progress },
+                        progress = { grow.value },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(6.dp)
@@ -631,6 +741,8 @@ private fun BookTile(
     modifier: Modifier = Modifier,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val grow = rememberGrow(book.progress)
     Column(modifier) {
         Box {
             Box(
@@ -679,7 +791,7 @@ private fun BookTile(
             Spacer(Modifier.height(10.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 LinearProgressIndicator(
-                    progress = { book.progress },
+                    progress = { grow.value },
                     modifier = Modifier
                         .weight(1f)
                         .height(4.dp)
@@ -714,6 +826,16 @@ private fun BookTile(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
+                if (book.series != null) {
+                    Text(
+                        book.series + (book.seriesIndex?.let { " · " + seriesNumber(it) } ?: ""),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (book.rating > 0) Stars(book.rating, Modifier.padding(top = 2.dp))
             }
             // The same menu a long-press on the cover opens.
             Box {
@@ -737,13 +859,23 @@ private fun BookTile(
                             )
                         }
                         DropdownMenuItem(
-                            text = { Text("Edit details…") },
+                            text = { Text("Details and rating…") },
                             leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
                             onClick = {
                                 menuOpen = false
                                 onEdit()
                             },
                         )
+                        if (book.highlights.isNotEmpty()) {
+                            DropdownMenuItem(
+                                text = { Text("Share highlights") },
+                                leadingIcon = { Icon(Icons.Filled.Share, contentDescription = null) },
+                                onClick = {
+                                    menuOpen = false
+                                    HighlightExport.share(context, book)
+                                },
+                            )
+                        }
                         DropdownMenuItem(
                             text = { Text("Collections…") },
                             leadingIcon = { Icon(LibraryIcons.Collection, contentDescription = null) },

@@ -1,5 +1,12 @@
 package com.folio.reader.ui
 
+import com.folio.reader.ui.reader.ReadingLight
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Box
 import android.net.Uri
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -65,63 +72,68 @@ fun FolioNavHost(incoming: MutableStateFlow<Uri?>, openBook: MutableStateFlow<St
         }
     }
 
-    NavHost(
-        navController = nav,
-        startDestination = "library",
-        enterTransition = { fadeIn(tween(220)) + scaleIn(tween(220), initialScale = 0.96f) },
-        exitTransition = { fadeOut(tween(180)) },
-        popEnterTransition = { fadeIn(tween(220)) },
-        popExitTransition = { fadeOut(tween(180)) + scaleOut(tween(180), targetScale = 0.96f) },
-    ) {
-        composable("library") {
-            LibraryScreen(
-                vm = libraryVm,
-                onOpen = open,
-                onFindFree = { nav.navigate("free") { launchSingleTop = true } },
-            )
+    val app = LocalContext.current.applicationContext as FolioApp
+    val display by app.settings.settings.collectAsStateWithLifecycle()
+    Box(Modifier.fillMaxSize()) {
+        NavHost(
+            navController = nav,
+            startDestination = "library",
+            enterTransition = { fadeIn(tween(220)) + scaleIn(tween(220), initialScale = 0.96f) },
+            exitTransition = { fadeOut(tween(180)) },
+            popEnterTransition = { fadeIn(tween(220)) },
+            popExitTransition = { fadeOut(tween(180)) + scaleOut(tween(180), targetScale = 0.96f) },
+        ) {
+            composable("library") {
+                LibraryScreen(
+                    vm = libraryVm,
+                    onOpen = open,
+                    onFindFree = { nav.navigate("free") { launchSingleTop = true } },
+                )
+            }
+            composable("free") {
+                val freeVm: FreeBooksViewModel = viewModel(
+                    factory = viewModelFactory {
+                        initializer { FreeBooksViewModel(this[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY] as FolioApp) }
+                    },
+                )
+                FreeBooksScreen(vm = freeVm, onBack = { nav.popBackStack() }, onOpen = open)
+            }
+            composable(
+                "reader/{bookId}",
+                arguments = listOf(navArgument("bookId") { type = NavType.StringType }),
+            ) { entry ->
+                val bookId = entry.arguments?.getString("bookId") ?: return@composable
+                val isPdf = libraryVm.allBooks.value.firstOrNull { it.id == bookId }?.isPdf == true
+                ReaderScreen(
+                    bookId = bookId,
+                    onBack = { nav.popBackStack() },
+                    onOriginalPages = if (!isPdf) null else {
+                        {
+                            libraryVm.showPdfPages(bookId)
+                            nav.navigate("pdf/$bookId") { popUpTo("reader/{bookId}") { inclusive = true } }
+                        }
+                    },
+                )
+            }
+            composable(
+                "pdf/{bookId}",
+                arguments = listOf(navArgument("bookId") { type = NavType.StringType }),
+            ) { entry ->
+                val bookId = entry.arguments?.getString("bookId") ?: return@composable
+                PdfReaderScreen(
+                    bookId = bookId,
+                    onBack = { nav.popBackStack() },
+                    onOpenText = { nav.navigate("reader/$bookId") { popUpTo("pdf/{bookId}") { inclusive = true } } },
+                )
+            }
+            composable(
+                "listen/{bookId}",
+                arguments = listOf(navArgument("bookId") { type = NavType.StringType }),
+            ) { entry ->
+                val bookId = entry.arguments?.getString("bookId") ?: return@composable
+                ListenScreen(bookId = bookId, onBack = { nav.popBackStack() })
+            }
         }
-        composable("free") {
-            val freeVm: FreeBooksViewModel = viewModel(
-                factory = viewModelFactory {
-                    initializer { FreeBooksViewModel(this[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY] as FolioApp) }
-                },
-            )
-            FreeBooksScreen(vm = freeVm, onBack = { nav.popBackStack() }, onOpen = open)
-        }
-        composable(
-            "reader/{bookId}",
-            arguments = listOf(navArgument("bookId") { type = NavType.StringType }),
-        ) { entry ->
-            val bookId = entry.arguments?.getString("bookId") ?: return@composable
-            val isPdf = libraryVm.allBooks.value.firstOrNull { it.id == bookId }?.isPdf == true
-            ReaderScreen(
-                bookId = bookId,
-                onBack = { nav.popBackStack() },
-                onOriginalPages = if (!isPdf) null else {
-                    {
-                        libraryVm.showPdfPages(bookId)
-                        nav.navigate("pdf/$bookId") { popUpTo("reader/{bookId}") { inclusive = true } }
-                    }
-                },
-            )
-        }
-        composable(
-            "pdf/{bookId}",
-            arguments = listOf(navArgument("bookId") { type = NavType.StringType }),
-        ) { entry ->
-            val bookId = entry.arguments?.getString("bookId") ?: return@composable
-            PdfReaderScreen(
-                bookId = bookId,
-                onBack = { nav.popBackStack() },
-                onOpenText = { nav.navigate("reader/$bookId") { popUpTo("pdf/{bookId}") { inclusive = true } } },
-            )
-        }
-        composable(
-            "listen/{bookId}",
-            arguments = listOf(navArgument("bookId") { type = NavType.StringType }),
-        ) { entry ->
-            val bookId = entry.arguments?.getString("bookId") ?: return@composable
-            ListenScreen(bookId = bookId, onBack = { nav.popBackStack() })
-        }
+        ReadingLight(display)
     }
 }

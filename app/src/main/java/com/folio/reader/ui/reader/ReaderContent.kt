@@ -9,6 +9,7 @@ import com.folio.reader.data.ReaderSettings
 import com.folio.reader.data.ReaderTheme
 import com.folio.reader.epub.EpubBook
 import java.io.ByteArrayInputStream
+import java.io.File
 import java.util.Locale
 
 /**
@@ -57,6 +58,7 @@ object ReaderContent {
         url: Uri,
         cssFor: () -> String,
         startFor: (path: String) -> ChapterStart,
+        userFont: (name: String) -> File? = { null },
     ): WebResourceResponse {
         val path = pathFor(url) ?: return blocked()
         if (path == INTERNAL + "reader.js") {
@@ -66,6 +68,10 @@ object ReaderContent {
             val name = path.substringAfterLast('/')
             val stream = runCatching { assets.open("fonts/$name") }.getOrNull() ?: return notFound()
             return WebResourceResponse("font/ttf", null, stream)
+        }
+        if (path.startsWith(INTERNAL + "myfonts/")) {
+            val file = userFont(path.substringAfterLast('/')) ?: return notFound()
+            return WebResourceResponse(if (file.extension.equals("otf", true)) "font/otf" else "font/ttf", null, file.inputStream())
         }
         val mediaType = book.mediaTypeFor(path)
         val isDocument = mediaType == "application/xhtml+xml" || mediaType == "text/html"
@@ -180,6 +186,11 @@ object ReaderContent {
             append("img,video,svg{max-width:100% !important;max-height:calc(100vh - 8px) !important;")
             append("object-fit:contain;break-inside:avoid;-webkit-column-break-inside:avoid;}")
             append("img,video{height:auto !important;}")
+            // On a dark page, pictures are toned down a little, and drawings with see-through
+            // backgrounds (black lines, labels) get a paper-coloured backing so they stay visible.
+            if (theme.isDark) {
+                append("body img,body svg{background-color:#EDE9E1 !important;border-radius:3px;filter:brightness(.88);}")
+            }
             append("h1,h2,h3,h4{break-after:avoid;-webkit-column-break-after:avoid;line-height:1.25 !important;")
             append("-webkit-hyphens:manual;hyphens:manual;text-wrap:balance;}")
             // Book headings get room to breathe and sit centred, like a printed chapter opening.
@@ -228,7 +239,11 @@ object ReaderContent {
             // so the justify setting applies both ways without flattening title pages.
             if (settings.justify) append(".folio-p{text-align:justify !important;text-align-last:start;}")
             else append(".folio-p{text-align:start !important;}")
-            settings.font.css?.let { family ->
+            val own = settings.customFont
+            if (own != null) {
+                append("@font-face{font-family:'Folio Own';src:url('$ORIGIN${INTERNAL}myfonts/${Uri.encode(own)}');}")
+                append("body,body *:not(pre):not(code):not(kbd):not(samp){font-family:'Folio Own',serif !important;}")
+            } else settings.font.css?.let { family ->
                 append("body,body *:not(pre):not(code):not(kbd):not(samp){font-family:$family !important;}")
             }
         }
@@ -270,6 +285,10 @@ object ReaderContent {
           var page = 0;
           var ready = false;
           var anim = null;
+          // How pages change: 'turn' (the app draws a page turning over), 'slide' or 'none'.
+          var turnStyle = 'slide';
+          // While a finger turns the page: 'f' forward, 'b' back, 'x' nowhere to turn to.
+          var turning = null;
           var curX = 0;
 
           function width() { return window.innerWidth || root.clientWidth || 0; }
@@ -548,7 +567,7 @@ object ReaderContent {
             if (e.touches.length !== 1 || hasSelection()) { axis = 'none'; return; }
             if (anim) { cancelAnimationFrame(anim); anim = null; }
             sx = e.touches[0].clientX; sy = e.touches[0].clientY;
-            sScroll = page * width(); st = Date.now(); axis = null; moved = false;
+            sScroll = page * width(); st = Date.now(); axis = null; moved = false; turning = null;
           }, { passive: true });
           document.addEventListener('touchmove', function (e) {
             if (scrollMode || axis === 'none' || e.touches.length !== 1) return;
@@ -560,6 +579,16 @@ object ReaderContent {
             if (axis !== 'x') return;
             moved = true;
             e.preventDefault();
+            // A turning page follows the finger (the app draws it); a cut happens when it lifts.
+            if (turnStyle === 'turn' && bridge && bridge.turnStart) {
+              if (turning === null) {
+                var fwd = dx < 0;
+                turning = bridge.turnStart(fwd, fwd ? page >= lastPage() : page <= 0) ? (fwd ? 'f' : 'b') : 'x';
+              }
+              if (turning !== 'x') bridge.turnDrag(Math.max(0, turning === 'f' ? -dx : dx) / width());
+              return;
+            }
+            if (turnStyle !== 'slide') return;
             var max = lastPage() * width();
             var x = sScroll - dx;
             // Resist a little past the first and last page of the chapter.
@@ -573,12 +602,23 @@ object ReaderContent {
             var dx = (e.changedTouches[0] ? e.changedTouches[0].clientX : sx) - sx;
             var v = dx / Math.max(1, Date.now() - st);
             var threshold = width() * 0.18;
+            if (turning === 'f' || turning === 'b') {
+              var d = turning === 'f' ? -dx : dx, vv = turning === 'f' ? -v : v;
+              var commit = d > threshold || vv > 0.35;
+              turning = null;
+              bridge.turnEnd(commit);
+              if (commit) userTurned();
+              return;
+            }
+            if (turning === 'x') { turning = null; return; }
             if (dx < -threshold || v < -0.35) folio.next();
             else if (dx > threshold || v > 0.35) folio.prev();
             else show(page, true);
           });
           document.addEventListener('touchcancel', function () {
             if (scrollMode) { auto.held = false; return; }
+            if (turning === 'f' || turning === 'b') bridge.turnEnd(false);
+            turning = null;
             if (axis === 'x') show(page, true);
             axis = null;
           });
@@ -911,25 +951,37 @@ object ReaderContent {
           function userTurned() { if (tts && bridge && bridge.onManualTurn) bridge.onManualTurn(); }
 
           var folio = window.folio = {
-            next: function () {
+            setTurn: function (s) { turnStyle = s; },
+            // [direct]: the app is already drawing the turn, so just move.
+            next: function (direct) {
               if (leaving) return;
+              if (!scrollMode && !direct && turnStyle === 'turn' && bridge && bridge.turnPage) {
+                if (anim) { cancelAnimationFrame(anim); anim = null; setScroll(page * width()); }
+                bridge.turnPage(true, page >= lastPage());
+                return;
+              }
               if (scrollMode) {
                 if (window.scrollY >= readMax() - 2) { if (bridge && bridge.nextChapter()) leaving = true; }
                 else { scrollToY(window.scrollY + height() * 0.9, true); userTurned(); }
                 return;
               }
               if (page >= lastPage()) { if (anim) { cancelAnimationFrame(anim); anim = null; } setScroll(page * width()); if (bridge && bridge.nextChapter()) leaving = true; }
-              else { show(page + 1, true); userTurned(); }
+              else { show(page + 1, turnStyle === 'slide'); userTurned(); }
             },
-            prev: function () {
+            prev: function (direct) {
               if (leaving) return;
+              if (!scrollMode && !direct && turnStyle === 'turn' && bridge && bridge.turnPage) {
+                if (anim) { cancelAnimationFrame(anim); anim = null; setScroll(page * width()); }
+                bridge.turnPage(false, page <= 0);
+                return;
+              }
               if (scrollMode) {
                 if (window.scrollY <= 2) { if (bridge && bridge.prevChapter()) leaving = true; }
                 else { scrollToY(window.scrollY - height() * 0.9, true); userTurned(); }
                 return;
               }
               if (page <= 0) { if (anim) { cancelAnimationFrame(anim); anim = null; } setScroll(0); if (bridge && bridge.prevChapter()) leaving = true; }
-              else { show(page - 1, true); userTurned(); }
+              else { show(page - 1, turnStyle === 'slide'); userTurned(); }
             },
             // A short excerpt from the top of the page, to label a bookmark.
             snippet: function () {
@@ -976,7 +1028,14 @@ object ReaderContent {
               var s = offsetOf(r.startContainer, r.startOffset), e = offsetOf(r.endContainer, r.endOffset);
               var text = String(sel).replace(/\s+/g, ' ').trim();
               if (e <= s || !text) return null;
-              return { s: s, e: e, text: text.length > 1000 ? text.slice(0, 1000) + '\u2026' : text };
+              // The sentence around it, for the word list.
+              var all = fullText(), a = s, b = e;
+              while (a > 0 && s - a < 300 && !/[.!?\u2026]/.test(all[a - 1])) a--;
+              while (b < all.length && b - e < 300 && !/[.!?\u2026]/.test(all[b])) b++;
+              if (b < all.length) b++;
+              while (b < all.length && /["'\u201d\u2019)]/.test(all[b])) b++;
+              var ctx = all.slice(a, b).replace(/\s+/g, ' ').replace(/^["'\u201d\u2019)\s]+/, '').trim();
+              return { s: s, e: e, text: text.length > 1000 ? text.slice(0, 1000) + '\u2026' : text, ctx: ctx };
             },
             clearSelection: function () {
               var sel = window.getSelection();
@@ -1047,6 +1106,10 @@ class ReaderBridge(
     private val highlightTapped: (id: String) -> Unit = {},
     /** The reader tapped a footnote marker: the note's text, and the link to it. */
     private val footnoteTapped: (text: String, href: String) -> Unit = { _, _ -> },
+    private val turnRequested: (forward: Boolean, edge: Boolean) -> Unit = { _, _ -> },
+    private val turnStarted: (forward: Boolean, edge: Boolean) -> Boolean = { _, _ -> false },
+    private val turnDragged: (fraction: Float) -> Unit = {},
+    private val turnEnded: (commit: Boolean) -> Unit = {},
 ) {
     @JavascriptInterface fun onPage(page: Int, count: Int, offset: Float, section: Int, sectionEnd: Int, charsLeft: Int, charAt: Int) =
         pageChanged(PageInfo(page, count, offset, section, sectionEnd, charsLeft, charAt))
@@ -1058,6 +1121,12 @@ class ReaderBridge(
     @JavascriptInterface fun onManualTurn() = manualTurn()
     @JavascriptInterface fun onHighlightTap(id: String) = highlightTapped(id)
     @JavascriptInterface fun onFootnote(text: String, href: String) = footnoteTapped(text, href)
+    /** A page turn the app should draw: which way, and whether it crosses into another chapter. */
+    @JavascriptInterface fun turnPage(forward: Boolean, edge: Boolean) = turnRequested(forward, edge)
+    /** A finger starts turning the page; false if there's nowhere to turn to. */
+    @JavascriptInterface fun turnStart(forward: Boolean, edge: Boolean): Boolean = turnStarted(forward, edge)
+    @JavascriptInterface fun turnDrag(fraction: Float) = turnDragged(fraction)
+    @JavascriptInterface fun turnEnd(commit: Boolean) = turnEnded(commit)
 }
 
 /** Where the reader is in a chapter, as the page script reports it. */

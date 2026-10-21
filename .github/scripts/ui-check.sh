@@ -94,6 +94,33 @@ swipe_next() { adb shell input swipe $((W * 8 / 10)) $((H / 2)) $((W * 2 / 10)) 
 # Shows the controls (a centre tap toggles them) until the given control is on screen.
 controls_for() { [ -n "$(find_label "$1")" ] || { adb shell input tap $((W / 2)) $((H / 2)); sleep 2; }; }
 adb logcat -c
+# The page-turn animation: record the screen while turning, and keep frames from it.
+if [ "${PART:-}" = "turn" ]; then
+  adb shell am force-stop $PKG
+  printf '[{"id":"test","title":"Crime and Punishment","author":"Fyodor Dostoyevsky","fileName":"test.epub","coverFileName":null,"addedAt":1,"lastOpenedAt":0,"progress":0,"chapterIndex":5,"chapterOffset":0.3}]' \
+    | adb exec-in run-as $PKG sh -c 'cat > files/library.json'
+  sleep 20
+  adb shell am broadcast -a android.intent.action.CLOSE_SYSTEM_DIALOGS || true
+  adb shell am start -W -n $PKG/.MainActivity --es open_book test
+  sleep 10
+  adb shell am broadcast -a android.intent.action.CLOSE_SYSTEM_DIALOGS || true
+  sleep 2
+  adb exec-out screencap -p > "$OUT/turn-0-start.png"
+  adb shell screenrecord --time-limit 12 /sdcard/turn.mp4 &
+  REC=$!
+  sleep 1
+  # A slow drag (the page should follow the finger), a quick swipe back, a short drag let go.
+  adb shell input swipe $((W * 9 / 10)) $((H / 2)) $((W * 1 / 10)) $((H / 2)) 1500; sleep 2
+  adb shell input swipe $((W * 2 / 10)) $((H / 2)) $((W * 8 / 10)) $((H / 2)) 150; sleep 2
+  adb shell input swipe $((W * 8 / 10)) $((H / 2)) $((W * 7 / 10)) $((H / 2)) 600; sleep 2
+  adb shell input tap $((W * 9 / 10)) $((H / 2)); sleep 2
+  wait $REC
+  adb pull /sdcard/turn.mp4 "$OUT/turn.mp4" || true
+  mkdir -p "$OUT/frames"
+  ffmpeg -loglevel error -i "$OUT/turn.mp4" -vf "fps=20,scale=360:-1" "$OUT/frames/f%03d.png" || true
+  adb logcat -d | grep -E "FolioTurn|chromium|AndroidRuntime" > "$OUT/turn-log.txt" || true
+  exit 0
+fi
 if part reading; then
 adb shell am start -W -n $PKG/.MainActivity --es open_book test
 sleep 8

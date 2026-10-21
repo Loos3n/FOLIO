@@ -16,6 +16,8 @@ import java.util.zip.ZipOutputStream
 /** What a restore brought back, for the message afterwards. */
 data class RestoreSummary(
     val counts: RestoreCounts,
+    /** False for an automatic backup, which holds no book files. */
+    val hadBookFiles: Boolean,
     /** Audiobooks whose audio files aren't on this phone and need adding again. */
     val audioToReAdd: List<String>,
 )
@@ -23,7 +25,7 @@ data class RestoreSummary(
 /**
  * Saves the whole library to one zip file the reader picks (on the phone, a memory card or
  * Google Drive) and brings it back: the EPUB files and covers, every reading place,
- * bookmark, highlight, note and collection, reading stats and settings. Audiobooks are
+ * bookmark, highlight, note and collection, looked-up words, added fonts, reading stats and settings. Audiobooks are
  * saved as their place and chapters only; their audio files stay where they are.
  */
 class Backup(
@@ -31,6 +33,8 @@ class Backup(
     private val library: LibraryRepository,
     private val settings: SettingsRepository,
     private val stats: ReadingStats,
+    private val words: WordList,
+    private val fonts: UserFonts,
 ) {
     companion object {
         const val MIME = "application/zip"
@@ -42,8 +46,12 @@ class Backup(
         fun suggestedName() = "Folio backup ${LocalDate.now()}.zip"
     }
 
-    /** Writes the backup to [uri]. Returns how many books it holds. */
-    suspend fun write(uri: Uri): Int = withContext(Dispatchers.IO) {
+    /**
+     * Writes the backup to [uri], replacing what was there. Returns how many books it holds.
+     * Without [bookFiles] it keeps only places, highlights, notes and the rest: small enough
+     * to save every night, and restored onto books already on the phone.
+     */
+    suspend fun write(uri: Uri, bookFiles: Boolean = true): Int = withContext(Dispatchers.IO) {
         val books = library.books.value
         val index = JSONObject()
             .put("version", VERSION)
@@ -51,6 +59,8 @@ class Backup(
             .put("books", JSONArray().apply { books.forEach { put(it.toJson()) } })
             .put("stats", stats.toJson())
             .put("settings", settings.toJson())
+            .put("words", words.toJson())
+            .put("bookFiles", bookFiles)
         val out = runCatching { context.contentResolver.openOutputStream(uri, "wt") }.getOrNull()
             ?: context.contentResolver.openOutputStream(uri)
             ?: error("Couldn't write to that file.")
@@ -67,9 +77,11 @@ class Backup(
                 zip.closeEntry()
             }
             for (book in books) {
+                if (!bookFiles) break
                 if (!book.isAudio) add("books/${book.fileName}", library.bookFile(book))
                 book.coverFileName?.let { add("covers/$it", library.coverFile(book)) }
             }
+            fonts.fonts.value.forEach { add("fonts/${it.fileName}", fonts.file(it.fileName)) }
         }
         books.size
     }
@@ -101,19 +113,25 @@ class Backup(
             val counts = library.restore(books, dir)
             o.optJSONObject("stats")?.let { stats.merge(it, counts.ids) }
             o.optJSONObject("settings")?.let { settings.restore(it) }
+            o.optJSONArray("words")?.let { words.merge(it, counts.ids) }
+            File(dir, "fonts").listFiles()?.forEach { f ->
+                val target = File(fonts.dir, f.name)
+                if (f.isFile && UserFonts.safeName(f.name) && !target.exists()) f.copyTo(target)
+            }
+            fonts.refresh()
             val missing = books.mapNotNull { b -> library.get(counts.ids[b.id] ?: b.id) }
                 .filter { it.isAudio && library.audioMissing(it) }
                 .map { it.title }
-            RestoreSummary(counts, missing)
+            RestoreSummary(counts, o.optBoolean("bookFiles", true), missing)
         } finally {
             dir.deleteRecursively()
         }
     }
 
-    /** Only `books/<name>` and `covers/<name>`: nothing that could land outside the restore folder. */
+    /** Only `books/<name>`, `covers/<name>` and `fonts/<name>`: nothing that could land outside the restore folder. */
     private fun safeFile(name: String): Boolean {
         val parts = name.split('/')
-        return parts.size == 2 && parts[0] in setOf("books", "covers") &&
+        return parts.size == 2 && parts[0] in setOf("books", "covers", "fonts") &&
             parts[1].isNotEmpty() && parts[1] != "." && parts[1] != ".." && '\\' !in parts[1]
     }
 }

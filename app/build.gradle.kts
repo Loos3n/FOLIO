@@ -18,14 +18,19 @@ android {
     }
 
     signingConfigs {
-        // One key kept in the repo, so every build (on any machine or CI runner) is signed
-        // the same way and installs over the last one. Android refuses an update signed
-        // with a different key, which is what forced uninstalling before.
-        getByName("debug") {
-            storeFile = file("folio-debug.keystore")
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
+        // Builds on GitHub are signed with Folio's own key, so each one installs over the last.
+        // The key is kept in the repo only encrypted (signing/folio.jks.enc); the build
+        // workflow decrypts it with the FOLIO_SIGNING_PASSWORD secret. Builds elsewhere use
+        // the machine's usual debug key.
+        val keystore = System.getenv("FOLIO_KEYSTORE")?.let { file(it) }?.takeIf { it.isFile }
+        val password = System.getenv("FOLIO_SIGNING_PASSWORD")
+        if (keystore != null && password != null) {
+            getByName("debug") {
+                storeFile = keystore
+                storePassword = password
+                keyAlias = "folio"
+                keyPassword = password
+            }
         }
     }
 
@@ -34,7 +39,7 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // Signed with the debug key so a release build installs without extra setup.
+            // Signed with the same key as the debug build, so it installs without extra setup.
             signingConfig = signingConfigs.getByName("debug")
         }
     }
@@ -64,5 +69,6 @@ dependencies {
     implementation("androidx.compose.material:material-icons-core")
     implementation("androidx.media3:media3-exoplayer:1.5.1")
     implementation("androidx.media3:media3-session:1.5.1")
+    implementation("androidx.work:work-runtime-ktx:2.10.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

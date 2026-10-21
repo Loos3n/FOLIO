@@ -18,7 +18,19 @@ jobs:
           distribution: temurin
           java-version: 17
       - uses: gradle/actions/setup-gradle@v4
+      - name: Unlock the signing key
+        env:
+          FOLIO_SIGNING_PASSWORD: ${{ secrets.FOLIO_SIGNING_PASSWORD }}
+        run: |
+          if [ -z "$FOLIO_SIGNING_PASSWORD" ]; then
+            echo "::error::Add the FOLIO_SIGNING_PASSWORD secret (Settings > Secrets and variables > Actions) so builds are signed with Folio's key."
+            exit 1
+          fi
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in signing/folio.jks.enc -out "$RUNNER_TEMP/folio.jks" -pass env:FOLIO_SIGNING_PASSWORD
+          echo "FOLIO_KEYSTORE=$RUNNER_TEMP/folio.jks" >> "$GITHUB_ENV"
       - run: ./gradlew assembleDebug
+        env:
+          FOLIO_SIGNING_PASSWORD: ${{ secrets.FOLIO_SIGNING_PASSWORD }}
       # Published as a release asset (not an Actions artifact) so it's one tap to
       # download on a phone and doesn't count against Actions storage.
       - name: Publish APK to the "latest-build" release

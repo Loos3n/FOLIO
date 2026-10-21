@@ -1,4 +1,4 @@
-@file:OptIn(ExperimentalMaterial3Api::class)
+@file:OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 
 package com.folio.reader.ui.library
 
@@ -13,6 +13,15 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.SuggestionChip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.StrokeCap
@@ -65,7 +74,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.folio.reader.data.Book
 import com.folio.reader.data.StatsSnapshot
+import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
+import com.folio.reader.data.AutoBackupState
 import java.time.format.TextStyle
 import java.util.Locale
 
@@ -86,6 +100,8 @@ internal fun StatsSheet(
     books: List<Book>,
     goalMinutes: Int,
     onSetGoal: (Int) -> Unit,
+    yearGoal: Int,
+    onSetYearGoal: (Int) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val today = remember { LocalDate.now() }
@@ -93,6 +109,10 @@ internal fun StatsSheet(
     var choosingGoal by remember { mutableStateOf(false) }
     if (choosingGoal) {
         GoalDialog(goalMinutes, onPick = { onSetGoal(it); choosingGoal = false }, onDismiss = { choosingGoal = false })
+    }
+    var choosingYearGoal by remember { mutableStateOf(false) }
+    if (choosingYearGoal) {
+        YearGoalDialog(yearGoal, onPick = { onSetYearGoal(it); choosingYearGoal = false }, onDismiss = { choosingYearGoal = false })
     }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(
@@ -107,13 +127,14 @@ internal fun StatsSheet(
             val days = stats.streak(today, goalMinutes)
             val todaySeconds = stats.secondsOn(today)
             val met = goalMinutes > 0 && todaySeconds >= goalMinutes * 60L
+            val ring = rememberGrow(if (goalMinutes > 0) (todaySeconds / (goalMinutes * 60f)).coerceIn(0f, 1f) else 0f)
             Surface(color = scheme.primaryContainer, contentColor = scheme.onPrimaryContainer, shape = RoundedCornerShape(24.dp)) {
                 Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 20.dp, bottom = 8.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Box(Modifier.size(56.dp), contentAlignment = Alignment.Center) {
                             if (goalMinutes > 0) {
                                 CircularProgressIndicator(
-                                    progress = { (todaySeconds / (goalMinutes * 60f)).coerceIn(0f, 1f) },
+                                    progress = { ring.value },
                                     modifier = Modifier.fillMaxSize(),
                                     strokeWidth = 5.dp,
                                     trackColor = scheme.primary.copy(alpha = 0.18f),
@@ -163,6 +184,75 @@ internal fun StatsSheet(
                 }
             }
 
+            val zone = remember { ZoneId.systemDefault() }
+            val finishedThisYear = books.filter { it.finishedAt > 0 && Instant.ofEpochMilli(it.finishedAt).atZone(zone).year == today.year }
+                .sortedByDescending { it.finishedAt }
+            Surface(color = scheme.surfaceContainerHigh, shape = RoundedCornerShape(24.dp)) {
+                Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 16.dp, bottom = 8.dp)) {
+                    val n = finishedThisYear.size
+                    val yearFill = rememberGrow(if (yearGoal > 0) (n / yearGoal.toFloat()).coerceIn(0f, 1f) else 0f)
+                    Text(
+                        when {
+                            yearGoal > 0 -> "$n of $yearGoal books"
+                            n == 1 -> "1 book"
+                            else -> "$n books"
+                        },
+                        style = MaterialTheme.typography.titleLarge,
+                    )
+                    Text(
+                        if (yearGoal > 0 && n >= yearGoal) "${today.year} goal reached" else "Finished in ${today.year}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = scheme.onSurfaceVariant,
+                    )
+                    if (yearGoal > 0) {
+                        Spacer(Modifier.height(10.dp))
+                        LinearProgressIndicator(
+                            progress = { yearFill.value },
+                            modifier = Modifier.fillMaxWidth().padding(end = 8.dp).height(8.dp).clip(RoundedCornerShape(4.dp)),
+                            trackColor = scheme.primary.copy(alpha = 0.15f),
+                            strokeCap = StrokeCap.Round,
+                        )
+                        // Where a steady pace would have you by today.
+                        val due = yearGoal * today.dayOfYear / today.lengthOfYear()
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            when {
+                                n >= yearGoal -> "Every book from here is a bonus."
+                                n > due -> "${n - due} ahead of schedule"
+                                n == due -> "Right on schedule"
+                                else -> "${due - n} behind schedule"
+                            },
+                            style = MaterialTheme.typography.labelMedium,
+                            color = scheme.onSurfaceVariant,
+                        )
+                    }
+                    if (finishedThisYear.isNotEmpty()) {
+                        Spacer(Modifier.height(8.dp))
+                        finishedThisYear.take(6).forEach { b ->
+                            Text(
+                                b.title,
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        if (finishedThisYear.size > 6) {
+                            Text(
+                                "and ${finishedThisYear.size - 6} more",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = scheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Spacer(Modifier.weight(1f))
+                        TextButton(onClick = { choosingYearGoal = true }) {
+                            Text(if (yearGoal == 0) "Set a yearly goal" else "Change goal")
+                        }
+                    }
+                }
+            }
+
             val todayStats = stats.days[today.toString()]
             val week = (6 downTo 0).map { today.minusDays(it.toLong()) }
             val weekSeconds = week.sumOf { stats.days[it.toString()]?.seconds ?: 0L }
@@ -184,6 +274,7 @@ internal fun StatsSheet(
                 week.forEach { day ->
                     val s = stats.days[day.toString()]?.seconds ?: 0L
                     val isToday = day == today
+                    val bar = rememberGrow(s.toFloat() / maxSeconds)
                     Column(Modifier.weight(1f).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
                             if (s >= 60) "${s / 60}" else "",
@@ -194,7 +285,7 @@ internal fun StatsSheet(
                             Box(
                                 Modifier
                                     .fillMaxWidth()
-                                    .fillMaxHeight((s.toFloat() / maxSeconds).coerceIn(0.02f, 1f))
+                                    .fillMaxHeight(bar.value.coerceIn(0.02f, 1f))
                                     .clip(RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp, bottomStart = 3.dp, bottomEnd = 3.dp))
                                     .background(if (isToday) scheme.primary else scheme.primary.copy(alpha = 0.35f)),
                             )
@@ -319,16 +410,35 @@ internal fun CollectionsDialog(
     )
 }
 
-/** Changes a book's title, author and cover. A messy PDF name is the usual reason. */
+/** What [EditDetailsDialog] saves. */
+internal data class BookDetails(
+    val title: String,
+    val author: String?,
+    val cover: Uri?,
+    val removeCover: Boolean,
+    val series: String?,
+    val seriesIndex: Float?,
+    val rating: Int,
+)
+
+/** "2" rather than "2.0", but "2.5" stays. */
+internal fun seriesNumber(index: Float): String =
+    if (index == index.toInt().toFloat()) index.toInt().toString() else index.toString()
+
+/** Changes a book's title, author, cover, series and rating. A messy PDF name is the usual reason. */
 @Composable
 internal fun EditDetailsDialog(
     book: Book,
     cover: File?,
-    onSave: (title: String, author: String?, cover: Uri?, removeCover: Boolean) -> Unit,
+    seriesNames: List<String>,
+    onSave: (BookDetails) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var title by remember(book.id) { mutableStateOf(book.title) }
     var author by remember(book.id) { mutableStateOf(book.author.orEmpty()) }
+    var series by remember(book.id) { mutableStateOf(book.series.orEmpty()) }
+    var number by remember(book.id) { mutableStateOf(book.seriesIndex?.let(::seriesNumber).orEmpty()) }
+    var rating by remember(book.id) { mutableStateOf(book.rating) }
     var picked by remember(book.id) { mutableStateOf<Uri?>(null) }
     var removed by remember(book.id) { mutableStateOf(false) }
     val pickCover = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
@@ -389,16 +499,91 @@ internal fun EditDetailsDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = series,
+                        onValueChange = { series = it },
+                        label = { Text("Series") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    OutlinedTextField(
+                        value = number,
+                        onValueChange = { v -> number = v.filter { it.isDigit() || it == '.' }.take(5) },
+                        label = { Text("No.") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.width(72.dp),
+                    )
+                }
+                // Series already in the library, to pick rather than retype.
+                val suggestions = seriesNames.filter { it != series.trim() && (series.isBlank() || it.contains(series.trim(), ignoreCase = true)) }.take(4)
+                if (suggestions.isNotEmpty()) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        suggestions.forEach { name ->
+                            SuggestionChip(onClick = { series = name }, label = { Text(name, maxLines = 1, overflow = TextOverflow.Ellipsis) })
+                        }
+                    }
+                }
+                Column {
+                    Text("Your rating", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    StarPicker(rating, onPick = { rating = if (it == rating) 0 else it })
+                }
             }
         },
         confirmButton = {
             TextButton(
-                onClick = { onSave(title, author, picked, removed && picked == null) },
+                onClick = {
+                    onSave(
+                        BookDetails(
+                            title = title,
+                            author = author,
+                            cover = picked,
+                            removeCover = removed && picked == null,
+                            series = series.trim().ifEmpty { null },
+                            seriesIndex = number.toFloatOrNull(),
+                            rating = rating,
+                        ),
+                    )
+                },
                 enabled = title.isNotBlank(),
             ) { Text("Save") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+}
+
+/** Five stars to tap; tapping the current rating again clears it. */
+@Composable
+private fun StarPicker(rating: Int, onPick: (Int) -> Unit) {
+    Row {
+        for (n in 1..5) {
+            IconButton(onClick = { onPick(n) }, modifier = Modifier.size(44.dp)) {
+                Icon(
+                    if (n <= rating) Icons.Filled.Star else LibraryIcons.StarOutline,
+                    contentDescription = if (n == 1) "1 star" else "$n stars",
+                    tint = if (n <= rating) Color(0xFFE5A50A) else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(30.dp),
+                )
+            }
+        }
+    }
+}
+
+/** A row of small stars showing a rating. */
+@Composable
+internal fun Stars(rating: Int, modifier: Modifier = Modifier) {
+    Row(modifier) {
+        for (n in 1..5) {
+            Icon(
+                if (n <= rating) Icons.Filled.Star else LibraryIcons.StarOutline,
+                contentDescription = null,
+                tint = if (n <= rating) Color(0xFFE5A50A) else MaterialTheme.colorScheme.outlineVariant,
+                modifier = Modifier.size(12.dp),
+            )
+        }
+    }
 }
 
 /** A picked picture, shrunk for the small preview in [EditDetailsDialog]. */
@@ -411,6 +596,40 @@ private fun decodePreview(context: Context, uri: Uri): ImageBitmap? = runCatchin
         BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample })
     }?.asImageBitmap()
 }.getOrNull()
+
+private val YEAR_GOAL_CHOICES = listOf(0, 6, 12, 18, 24, 30, 40, 52, 75, 100)
+
+@Composable
+private fun YearGoalDialog(current: Int, onPick: (Int) -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(LibraryIcons.Stats, contentDescription = null) },
+        title = { Text("Books this year") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text(
+                    "Books and audiobooks count once you reach the end.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+                (YEAR_GOAL_CHOICES + current).distinct().sorted().forEach { books ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { onPick(books) },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = books == current, onClick = { onPick(books) })
+                        Text(if (books == 0) "No goal" else "$books books", style = MaterialTheme.typography.bodyLarge)
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
 
 @Composable
 private fun GoalDialog(current: Int, onPick: (Int) -> Unit, onDismiss: () -> Unit) {
@@ -442,4 +661,67 @@ private fun GoalDialog(current: Int, onPick: (Int) -> Unit, onDismiss: () -> Uni
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+}
+
+/** Turns the nightly backup on or off, and shows how the last one went. */
+@Composable
+internal fun AutoBackupDialog(
+    state: AutoBackupState,
+    onChoose: () -> Unit,
+    onNow: () -> Unit,
+    onOff: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val on = state.uri != null
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Automatic backup") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    "Once a day Folio saves your places, bookmarks, highlights, notes, word list, stats and settings to one file, " +
+                        "replacing the copy from before, so it never piles up. Pick Google Drive when choosing where to save " +
+                        "to keep it safe if you lose your phone.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    "The book files aren't included, which keeps it small. To restore on a new phone, add your books first, then use Restore from backup.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (on) {
+                    Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, shape = RoundedCornerShape(16.dp)) {
+                        Column(Modifier.fillMaxWidth().padding(14.dp)) {
+                            Text("Saving to ${state.place ?: "your chosen file"}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                            Text(
+                                state.lastError ?: if (state.lastSavedAt > 0) "Last saved ${savedWhen(state.lastSavedAt)}" else "Saving the first copy…",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (state.lastError != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    Row {
+                        TextButton(onClick = onNow) { Text("Back up now") }
+                        TextButton(onClick = onChoose) { Text("Change where") }
+                        TextButton(onClick = onOff) { Text("Turn off") }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (on) TextButton(onClick = onDismiss) { Text("Done") }
+            else TextButton(onClick = onChoose) { Text("Choose where to save") }
+        },
+        dismissButton = { if (!on) TextButton(onClick = onDismiss) { Text("Not now") } },
+    )
+}
+
+private fun savedWhen(at: Long): String {
+    val time = Instant.ofEpochMilli(at).atZone(ZoneId.systemDefault())
+    val clock = time.format(DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT))
+    return when (time.toLocalDate()) {
+        LocalDate.now() -> "today at $clock"
+        LocalDate.now().minusDays(1) -> "yesterday at $clock"
+        else -> time.format(DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT))
+    }
 }

@@ -2,6 +2,22 @@
 
 package com.folio.reader.ui.reader
 
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.Animatable
+import androidx.compose.ui.graphics.TransformOrigin
+import com.folio.reader.data.PageTurn
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.material.icons.filled.Add
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import com.folio.reader.data.UserFonts
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.animation.core.animateDpAsState
 import com.folio.reader.ui.common.MessageView
 import com.folio.reader.ui.common.LoadingView
 import android.annotation.SuppressLint
@@ -77,6 +93,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -137,6 +154,7 @@ import com.folio.reader.FolioApp
 import com.folio.reader.PageKeys
 import com.folio.reader.data.Bookmark
 import com.folio.reader.data.Highlight
+import com.folio.reader.data.HighlightExport
 import com.folio.reader.data.ReaderFont
 import com.folio.reader.data.ReaderSettings
 import com.folio.reader.data.ReaderTheme
@@ -220,7 +238,7 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
                 editing = it
                 editingNote = true
             }
-            2 -> defineTerm = Dictionary.termFrom(text).ifEmpty { null }
+            2 -> defineTerm = Dictionary.termFrom(text).ifEmpty { null }?.also { vm.saveWord(it, sel.optString("ctx")) }
             3 -> clipboard.setPrimaryClip(ClipData.newPlainText("Folio", text))
         }
     }
@@ -303,7 +321,11 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
     LaunchedEffect(autoScrolling) { autoPaused = false }
 
     var readingRequest by remember { mutableStateOf<ChapterRequest?>(null) }
-    var pausedAt by remember { mutableStateOf<Pair<ChapterRequest?, Int>?>(null) }
+    // Whether the reader went somewhere else while read-aloud was paused (however it was
+    // paused: here, the notification or headphones). If not, it carries on mid-page.
+    var movedWhilePaused by remember { mutableStateOf(false) }
+    LaunchedEffect(readAloud.paused) { if (readAloud.paused) movedWhilePaused = false }
+    LaunchedEffect(request) { if (readAloud.paused) movedWhilePaused = true }
     var restartJob by remember { mutableStateOf<Job?>(null) }
 
     fun startReading() {
@@ -338,10 +360,9 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
 
     fun togglePause() {
         if (readAloud.paused) {
-            // Carry on where it stopped, unless the reader has moved to another page since.
-            if (pausedAt == (vm.request.value to vm.state.value.page)) readAloud.resume() else startReading()
+            // Carry on from the sentence it stopped in, unless the reader has moved elsewhere since.
+            if (movedWhilePaused) startReading() else readAloud.resume()
         } else {
-            pausedAt = vm.request.value to vm.state.value.page
             readAloud.pause()
         }
     }
@@ -420,6 +441,7 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
     }
 
     val onManualTurn: () -> Unit = {
+        if (readAloud.paused) movedWhilePaused = true
         if (readAloud.active && !readAloud.paused) {
             restartJob?.cancel()
             restartJob = scope.launch {
@@ -433,11 +455,13 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
         webView?.evaluateJavascript(if (forward) "window.folio && folio.next()" else "window.folio && folio.prev()", null)
     }
 
+    var bottomPanelHeight by remember { mutableIntStateOf(0) }
     val onTap: (Int) -> Unit = { zone ->
         when {
             controlsVisible -> controlsVisible = false
-            zone < 0 -> turn(false)
-            zone > 0 -> turn(true)
+            // Pages turn by swiping; tapping the edges too only when chosen in Display.
+            zone < 0 && settings.tapToTurn -> turn(false)
+            zone > 0 && settings.tapToTurn -> turn(true)
             else -> controlsVisible = true
         }
     }
@@ -566,28 +590,42 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
                 }
             }
 
-            // A ribbon on bookmarked pages.
-            if (bookmarkHere != null && !state.loading && state.error == null) {
+            // A ribbon on bookmarked pages, dropping in from the top edge.
+            AnimatedVisibility(
+                visible = bookmarkHere != null && !state.loading && state.error == null,
+                enter = slideInVertically(spring(dampingRatio = 0.55f, stiffness = 500f)) { -it * 2 } + fadeIn(),
+                exit = slideOutVertically(tween(180)) { -it * 2 } + fadeOut(tween(180)),
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .windowInsetsPadding(WindowInsets.systemBarsIgnoringVisibility.only(WindowInsetsSides.Top))
+                    .padding(end = 20.dp),
+            ) {
                 Icon(
                     ReaderIcons.Bookmark,
                     contentDescription = "This page is bookmarked",
                     tint = Color(theme.link),
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .windowInsetsPadding(WindowInsets.systemBarsIgnoringVisibility.only(WindowInsetsSides.Top))
-                        .padding(end = 20.dp)
-                        .size(width = 22.dp, height = 30.dp),
+                    modifier = Modifier.size(width = 22.dp, height = 30.dp),
                 )
             }
 
+            // Always there while reading aloud, so pausing is one tap; it moves up above the
+            // controls when they're showing.
+            val barLift by animateDpAsState(
+                if (controlsVisible) with(LocalDensity.current) { bottomPanelHeight.toDp() } + 12.dp else 36.dp,
+                label = "readAloudBar",
+            )
             AnimatedVisibility(
-                visible = readAloud.active && !controlsVisible,
+                visible = readAloud.active,
                 enter = slideInVertically { it } + fadeIn(),
                 exit = slideOutVertically { it } + fadeOut(),
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .windowInsetsPadding(WindowInsets.systemBarsIgnoringVisibility.only(WindowInsetsSides.Bottom))
-                    .padding(bottom = 36.dp),
+                    .then(
+                        if (controlsVisible) Modifier
+                        else Modifier.windowInsetsPadding(WindowInsets.systemBarsIgnoringVisibility.only(WindowInsetsSides.Bottom)),
+                    )
+                    .padding(bottom = barLift)
+                    .zIndex(1f),
             ) {
                 val left = sleepEndsAt?.let { ((it - now) / 1000).coerceAtLeast(0) }
                 ReadAloudBar(
@@ -657,7 +695,9 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
                 visible = controlsVisible && !state.loading && state.error == null,
                 enter = slideInVertically { it } + fadeIn(),
                 exit = slideOutVertically { it } + fadeOut(),
-                modifier = Modifier.align(Alignment.BottomCenter),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .onSizeChanged { bottomPanelHeight = it.height },
             ) {
                 ReaderBottomPanel(
                     state = state,
@@ -704,6 +744,7 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
                     controlsVisible = false
                 },
                 onDeleteBookmark = vm::removeBookmark,
+                onShareHighlights = { vm.book()?.let { HighlightExport.share(context, it) } },
                 onOpenHighlight = { mark ->
                     vm.openHighlight(mark)
                     showToc = false
@@ -771,6 +812,7 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
         defineTerm?.let { term ->
             DictionarySheet(
                 term = term,
+                onFound = { vm.saveMeaning(term, it) },
                 onWebSearch = {
                     runCatching {
                         context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/search?q=" + Uri.encode("define $term"))))
@@ -844,6 +886,11 @@ private fun BookWebView(
     val css = remember(prefs, theme, scroll) { ReaderContent.css(prefs, theme, scroll) }
     val currentCss = rememberUpdatedState(css)
     val currentOnTap = rememberUpdatedState(onTap)
+    val currentTurn = rememberUpdatedState(prefs.pageTurn)
+    val turner = remember { PageTurner() }
+    // Which way the finger is turning the page (set from the page script's thread).
+    val dragForward = remember { java.util.concurrent.atomic.AtomicBoolean(true) }
+    val turnScope = rememberCoroutineScope()
 
     val webView = remember {
         FolioWebView(context).apply {
@@ -873,8 +920,10 @@ private fun BookWebView(
                     pageChanged = { info -> view.post { vm.onPage(info) } },
                     loaded = { info ->
                         view.post {
+                            view.evaluateJavascript("window.folio && folio.setTurn && folio.setTurn('${currentTurn.value.js}')", null)
                             vm.onPage(info)
                             currentOnChapterReady.value()
+                            turner.chapterReady()
                         }
                     },
                     tapped = { zone -> view.post { currentOnTap.value(zone) } },
@@ -883,6 +932,27 @@ private fun BookWebView(
                     manualTurn = { view.post { currentOnManualTurn.value() } },
                     highlightTapped = { id -> view.post { currentOnHighlightTap.value(id) } },
                     footnoteTapped = { text, href -> view.post { currentOnFootnote.value(text, href) } },
+                    turnRequested = { forward, edge ->
+                        // At the very start or end of the book there's nowhere to turn to.
+                        val turns = !edge || (if (forward) vm.hasNextChapter() else vm.hasPrevChapter())
+                        view.post {
+                            val move = { view.step(forward) }
+                            if (turns) turner.turn(turnScope, view, forward, edge, move) else move()
+                        }
+                    },
+                    turnStarted = { forward, edge ->
+                        val turns = !edge || (if (forward) vm.hasNextChapter() else vm.hasPrevChapter())
+                        if (turns) {
+                            dragForward.set(forward)
+                            view.post { turner.start(turnScope, view, forward, edge) { view.step(forward) } }
+                        }
+                        turns
+                    },
+                    turnDragged = { f -> view.post { turner.drag(f) } },
+                    turnEnded = { commit ->
+                        val forward = dragForward.get()
+                        view.post { turner.end(turnScope, commit, move = { view.step(forward) }, undo = { view.step(!forward) }) }
+                    },
                 ),
                 "FolioBridge",
             )
@@ -892,7 +962,10 @@ private fun BookWebView(
                     if (scheme != "http" && scheme != "https") return null
                     val book = vm.book ?: return ReaderContent.blocked()
                     return runCatching {
-                        ReaderContent.serve(book, assets, request.url, cssFor = { currentCss.value }, startFor = vm::startFor)
+                        ReaderContent.serve(
+                            book, assets, request.url, cssFor = { currentCss.value }, startFor = vm::startFor,
+                            userFont = (view.context.applicationContext as FolioApp).fonts::file,
+                        )
                     }.getOrElse { ReaderContent.blocked() }
                 }
 
@@ -957,8 +1030,29 @@ private fun BookWebView(
         }
     }
 
-    AndroidView(factory = { webView }, modifier = modifier)
+    LaunchedEffect(prefs.pageTurn) {
+        webView.evaluateJavascript("window.folio && folio.setTurn && folio.setTurn('${prefs.pageTurn.js}')", null)
+    }
+
+    Box(modifier) {
+        PageTurnUnder(turner)
+        AndroidView(
+            factory = { webView },
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    transformOrigin = TransformOrigin(0f, 0.5f)
+                    rotationY = turner.bookAngle()
+                    cameraDistance = 22f * density
+                },
+        )
+        PageTurnOver(turner)
+    }
 }
+
+/** Moves one page without the page script's own animation (the app is drawing the turn). */
+private fun WebView.step(forward: Boolean) =
+    evaluateJavascript(if (forward) "window.folio && folio.next(true)" else "window.folio && folio.prev(true)", null)
 
 /** Loads the chapter a request asks for, once (read-aloud may already have loaded it). */
 private fun FolioWebView.show(r: ChapterRequest, vm: ReaderViewModel) {
@@ -1034,11 +1128,25 @@ private fun ReaderTopBar(
                     )
                 }
             }
+            // A little pop when a page is bookmarked.
+            val pop = remember { Animatable(1f) }
+            var wasBookmarked by remember { mutableStateOf(bookmarked) }
+            LaunchedEffect(bookmarked) {
+                if (bookmarked && !wasBookmarked) {
+                    pop.snapTo(0.55f)
+                    pop.animateTo(1f, spring(dampingRatio = 0.35f, stiffness = 600f))
+                }
+                wasBookmarked = bookmarked
+            }
             IconButton(onClick = onBookmark) {
                 Icon(
                     if (bookmarked) ReaderIcons.Bookmark else ReaderIcons.BookmarkBorder,
                     contentDescription = if (bookmarked) "Remove bookmark" else "Bookmark this page",
                     tint = if (bookmarked) MaterialTheme.colorScheme.primary else LocalContentColor.current,
+                    modifier = Modifier.graphicsLayer {
+                        scaleX = pop.value
+                        scaleY = pop.value
+                    },
                 )
             }
         }
@@ -1288,6 +1396,7 @@ private fun TocSheet(
     onDeleteBookmark: (Bookmark) -> Unit,
     onOpenHighlight: (Highlight) -> Unit,
     onEditHighlight: (Highlight) -> Unit,
+    onShareHighlights: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState()) {
@@ -1350,7 +1459,7 @@ private fun TocSheet(
                 }
             }
             1 -> BookmarkList(bookmarks, onOpenBookmark, onDeleteBookmark)
-            else -> HighlightList(highlights, onOpenHighlight, onEditHighlight)
+            else -> HighlightList(highlights, onOpenHighlight, onEditHighlight, onShareAll = onShareHighlights)
         }
     }
 }
@@ -1438,7 +1547,7 @@ private fun BookmarkList(
 }
 
 @Composable
-private fun SettingsSheet(
+internal fun SettingsSheet(
     settings: ReaderSettings,
     scrollMode: Boolean,
     onScrollMode: (Boolean) -> Unit,
@@ -1456,6 +1565,41 @@ private fun SettingsSheet(
         ) {
             Text("Display", style = MaterialTheme.typography.headlineSmall)
 
+            SectionLabel("Light")
+            val followPhone = settings.brightness < 0f
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(ReaderIcons.Brightness, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.width(12.dp))
+                Slider(
+                    value = if (followPhone) 0.5f else settings.brightness,
+                    onValueChange = { v -> onChange { it.copy(brightness = v) } },
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(8.dp))
+                FilterChip(
+                    selected = followPhone,
+                    onClick = { onChange { it.copy(brightness = if (followPhone) 0.5f else -1f) } },
+                    label = { Text("Auto") },
+                )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(ReaderIcons.Warmth, contentDescription = null, tint = Color(0xFFE08A3C))
+                Spacer(Modifier.width(12.dp))
+                Slider(
+                    value = settings.warmth,
+                    onValueChange = { v -> onChange { it.copy(warmth = if (v < 0.04f) 0f else v) } },
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    if (settings.warmth <= 0f) "Off" else "Warm",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.width(48.dp),
+                    textAlign = TextAlign.Center,
+                )
+            }
+
             SectionLabel("Layout")
             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                 listOf("Pages" to false, "Scrolling" to true).forEachIndexed { i, (label, value) ->
@@ -1468,6 +1612,17 @@ private fun SettingsSheet(
             }
             if (scrollMode) {
                 SwitchRow("Reading ruler", settings.ruler) { on -> onChange { it.copy(ruler = on) } }
+            } else {
+                SectionLabel("Page turn")
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                    PageTurn.entries.forEachIndexed { i, t ->
+                        SegmentedButton(
+                            selected = settings.pageTurn == t,
+                            onClick = { onChange { it.copy(pageTurn = t) } },
+                            shape = SegmentedButtonDefaults.itemShape(i, PageTurn.entries.size),
+                        ) { Text(t.label) }
+                    }
+                }
             }
 
             SectionLabel("Theme")
@@ -1492,12 +1647,13 @@ private fun SettingsSheet(
                     FontCard(
                         label = font.label,
                         family = family,
-                        selected = settings.font == font,
-                        onClick = { onChange { it.copy(font = font) } },
+                        selected = settings.customFont == null && settings.font == font,
+                        onClick = { onChange { it.copy(font = font, customFont = null) } },
                         modifier = Modifier.weight(1f),
                     )
                 }
             }
+            UserFontRow(settings, onChange)
 
             SectionLabel("Text size")
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1545,8 +1701,62 @@ private fun SettingsSheet(
 
             Spacer(Modifier.height(2.dp))
             SwitchRow("Justify text", settings.justify) { on -> onChange { it.copy(justify = on) } }
+            SwitchRow("Turn pages by tapping the edges", settings.tapToTurn) { on -> onChange { it.copy(tapToTurn = on) } }
             SwitchRow("Turn pages with volume buttons", settings.volumeKeys) { on -> onChange { it.copy(volumeKeys = on) } }
         }
+    }
+}
+
+/** Fonts the reader added from their phone, and a card to add another. */
+@Composable
+private fun UserFontRow(settings: ReaderSettings, onChange: ((ReaderSettings) -> ReaderSettings) -> Unit) {
+    val context = LocalContext.current
+    val app = context.applicationContext as FolioApp
+    val fonts by app.fonts.fonts.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
+    val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+        if (uri != null) scope.launch {
+            app.fonts.add(uri)
+                .onSuccess { f -> onChange { it.copy(customFont = f.fileName) } }
+                .onFailure { Toast.makeText(context, it.message ?: "Couldn't add that font.", Toast.LENGTH_LONG).show() }
+        }
+    }
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        fonts.forEach { font ->
+            val family = remember(font.fileName) {
+                app.fonts.file(font.fileName)
+                    ?.let { f -> runCatching { android.graphics.Typeface.createFromFile(f) }.getOrNull() }
+                    ?.let { FontFamily(androidx.compose.ui.text.font.Typeface(it)) }
+                    ?: FontFamily.Serif
+            }
+            FontCard(
+                label = font.label,
+                family = family,
+                selected = settings.customFont == font.fileName,
+                onClick = { onChange { it.copy(customFont = font.fileName) } },
+                modifier = Modifier.width(84.dp),
+            )
+        }
+        Surface(
+            onClick = { pick.launch(UserFonts.MIME_TYPES) },
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            modifier = Modifier.width(84.dp),
+        ) {
+            Column(Modifier.padding(vertical = 12.dp, horizontal = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(32.dp))
+                Spacer(Modifier.height(2.dp))
+                Text("Add font", style = MaterialTheme.typography.labelSmall, maxLines = 1)
+            }
+        }
+    }
+    val chosen = fonts.firstOrNull { it.fileName == settings.customFont }
+    if (chosen != null) {
+        TextButton(onClick = {
+            onChange { it.copy(customFont = null) }
+            app.fonts.remove(chosen)
+        }) { Text("Remove “${chosen.label}”") }
     }
 }
 

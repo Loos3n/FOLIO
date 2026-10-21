@@ -80,7 +80,7 @@ class MainActivity : ComponentActivity() {
             intent?.getStringExtra("import_file")?.let { incoming.value = Uri.fromFile(java.io.File(filesDir, it)) }
             // Back up to, or restore from, a file in the app's own storage (used by the CI check).
             val app = application as FolioApp
-            val backup = Backup(app, app.library, app.settings, app.stats)
+            val backup = Backup(app, app.library, app.settings, app.stats, app.words, app.fonts)
             intent?.getStringExtra("backup_to")?.let { name ->
                 lifecycleScope.launch {
                     val r = runCatching { backup.write(Uri.fromFile(java.io.File(filesDir, name))) }
