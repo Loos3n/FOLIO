@@ -222,7 +222,7 @@ fun PageTurnOver(turner: PageTurner) {
                 .graphicsLayer {
                     transformOrigin = TransformOrigin(0f, 0.5f)
                     rotationY = turner.bookAngle()
-                    cameraDistance = 14f * density
+                    cameraDistance = 22f * density
                 }
                 .background(Color.Black.copy(alpha = 0.28f * (1f - p))),
         )
@@ -238,7 +238,7 @@ fun PageTurnOver(turner: PageTurner) {
                 .graphicsLayer {
                     transformOrigin = TransformOrigin(0f, 0.5f)
                     rotationY = -90f * p
-                    cameraDistance = 14f * density
+                    cameraDistance = 22f * density
                 },
         ) {
             Image(image, contentDescription = null, contentScale = ContentScale.FillBounds, modifier = Modifier.fillMaxSize())

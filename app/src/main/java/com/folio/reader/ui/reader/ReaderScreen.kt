@@ -1043,7 +1043,7 @@ private fun BookWebView(
                 .graphicsLayer {
                     transformOrigin = TransformOrigin(0f, 0.5f)
                     rotationY = turner.bookAngle()
-                    cameraDistance = 14f * density
+                    cameraDistance = 22f * density
                 },
         )
         PageTurnOver(turner)
