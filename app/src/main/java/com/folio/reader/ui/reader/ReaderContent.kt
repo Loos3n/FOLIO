@@ -216,6 +216,10 @@ object ReaderContent {
             // the usual book treatment of indenting every paragraph after the first.
             append(".folio-indent p{margin-top:0 !important;margin-bottom:0 !important;}")
             append(".folio-indent p+p{text-indent:1.5em !important;}")
+            // Side spacing the book adds on top of the reader's margin (marked by the script).
+            append(".folio-wrap,.folio-flat{margin-left:0 !important;margin-right:0 !important;")
+            append("padding-left:0 !important;padding-right:0 !important;max-width:none !important;}")
+            append(".folio-wrap{width:auto !important;}")
             append("hr{margin:1.5em 20% !important;border:0 !important;border-top:1px solid ${fg}40 !important;height:0 !important;}")
             append("pre{white-space:pre-wrap !important;}")
             append("::selection{background:${link}55;}")
@@ -350,6 +354,41 @@ object ReaderContent {
 
           // One-time tidy-up of the book's own formatting, before the first layout.
           var prepared = false;
+          // Some books pad their text in from the sides (a margin on every paragraph, or a
+          // wrapper with padding or a max-width), which stacks on the reader's own margin and
+          // squeezes the column. Mark what does that so the stylesheet can take it away, and
+          // leave alone the odd block indented further on purpose (a letter, a poem).
+          function flatten(blocks) {
+            var n = blocks.length;
+            if (!n) return;
+            var counts = new Map();
+            for (var i = 0; i < n; i++) {
+              for (var e = blocks[i].parentElement; e && e !== document.body; e = e.parentElement) {
+                counts.set(e, (counts.get(e) || 0) + 1);
+              }
+            }
+            counts.forEach(function (c, e) {
+              if (c * 2 >= n && !/^(BLOCKQUOTE|LI|UL|OL|DL|FIGURE|TABLE|TD|TH|PRE)$/.test(e.tagName)) {
+                e.classList.add('folio-wrap');
+              }
+            });
+            // The side spacing most paragraphs share is the book's page margin, not an indent.
+            var tally = {}, best = null, most = 0;
+            var key = function (b) {
+              var cs = getComputedStyle(b);
+              return [cs.marginLeft, cs.marginRight, cs.paddingLeft, cs.paddingRight, cs.maxWidth].join('|');
+            };
+            for (var j = 0; j < n; j++) {
+              var k = key(blocks[j]);
+              tally[k] = (tally[k] || 0) + 1;
+              if (tally[k] > most) { most = tally[k]; best = k; }
+            }
+            if (best === '0px|0px|0px|0px|none' || most * 2 < n) return;
+            for (var m = 0; m < n; m++) {
+              if (key(blocks[m]) === best) blocks[m].classList.add('folio-flat');
+            }
+          }
+
           function prepare() {
             if (prepared || !document.body) return;
             prepared = true;
@@ -372,6 +411,7 @@ object ReaderContent {
               var a = getComputedStyle(blocks[k]).textAlign;
               if (a !== 'center' && a !== 'right' && a !== '-webkit-center' && a !== 'end') body.push(blocks[k]);
             }
+            flatten(body);
             if (own) own.disabled = false;
             for (var b = 0; b < body.length; b++) body[b].classList.add('folio-p');
             for (var i = 0; i < ps.length && sampled < 40; i++) {
