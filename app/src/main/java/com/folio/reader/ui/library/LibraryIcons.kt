@@ -29,6 +29,7 @@ internal object LibraryIcons {
         "GridView",
         "M3,3v8h8V3H3zM9,9H5V5h4V9zM3,13v8h8v-8H3zM9,19H5v-4h4V19zM13,3v8h8V3H13zM19,9h-4V5h4V9zM13,13v8h8v-8H13zM19,19h-4v-4h4V19z",
     )
+    val Sort = icon("Sort", "M3,18h6v-2H3v2zM3,6v2h18V6H3zM3,13h12v-2H3v2z")
     val Shelf = icon("Shelf", "M4,4h3v13H4zM8,6h3v11H8zM12.3,4.9l2.9,-0.78 3.4,12.6 -2.9,0.78zM2,18h20v2H2z")
 
     private fun icon(name: String, path: String): ImageVector =
