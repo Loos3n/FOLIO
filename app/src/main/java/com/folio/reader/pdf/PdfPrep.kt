@@ -110,7 +110,7 @@ class PdfPrep(private val app: FolioApp) {
         } catch (e: Exception) {
             Log.w("FolioPdf", "Couldn't get the text of $id", e)
             if (library.textReady(entry)) return Outcome.Ready
-            library.setPdfPages(id, true)
+            // Not remembered as "pages": the next open tries the text again.
             Outcome.Failed(e.message ?: "Couldn't read the text in this PDF.")
         }
     }

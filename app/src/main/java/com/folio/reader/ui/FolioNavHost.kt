@@ -50,8 +50,9 @@ fun FolioNavHost(incoming: MutableStateFlow<Uri?>, openBook: MutableStateFlow<St
         val book = libraryVm.allBooks.value.firstOrNull { it.id == id }
         val route = when {
             book?.isAudio == true -> "listen/$id"
-            // A PDF reads like any other book once its text is ready, unless its pages were chosen.
-            book?.isPdf == true && (book.pdfPages || !libraryVm.textReady(book)) -> "pdf/$id"
+            // A PDF opens as text like any other book whenever its text is ready, unless Display
+            // says PDFs open as pages. Switching to pages while reading lasts for that visit only.
+            book?.isPdf == true && (libraryVm.display.value.pdfOpenAsPages || !libraryVm.textReady(book)) -> "pdf/$id"
             else -> "reader/$id"
         }
         nav.navigate(route) { launchSingleTop = true }

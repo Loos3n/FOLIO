@@ -89,6 +89,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import com.folio.reader.FolioApp
 import com.folio.reader.audio.ListenState
@@ -110,7 +114,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.folio.reader.data.AutoBackup
 import com.folio.reader.data.Backup
 import com.folio.reader.data.Book
-import java.util.Calendar
 import kotlin.math.roundToInt
 
 /** EPUBs, PDFs, and audio files for audiobooks (M4B files often come through as octet-stream). */
@@ -131,7 +134,13 @@ fun LibraryScreen(
     val sort by vm.sort.collectAsStateWithLifecycle()
     val collection by vm.collection.collectAsStateWithLifecycle()
     val collections by vm.collections.collectAsStateWithLifecycle()
+    val display by vm.display.collectAsStateWithLifecycle()
+    val shelfView = display.shelfView
+    val shelfWidth = LocalConfiguration.current.screenWidthDp - 52
+    val shelves = remember(books, shelfView, shelfWidth) { if (shelfView) shelfRows(books, shelfWidth) else emptyList() }
     var showStats by remember { mutableStateOf(false) }
+    // Search opens from the header; it stays open while there's something typed.
+    var searching by rememberSaveable { mutableStateOf(query.isNotEmpty()) }
     var showDisplay by remember { mutableStateOf(false) }
     var showWords by remember { mutableStateOf(false) }
     var showAutoBackup by remember { mutableStateOf(false) }
@@ -188,7 +197,8 @@ fun LibraryScreen(
             if (allBooks.isNotEmpty()) {
                 ExtendedFloatingActionButton(
                     onClick = pickBooks,
-                    expanded = fabExpanded,
+                    // Spelled out only while the library is new; after that a round + is enough.
+                    expanded = fabExpanded && allBooks.size < 3,
                     icon = { Icon(Icons.Filled.Add, contentDescription = null) },
                     text = { Text("Add books") },
                     containerColor = MaterialTheme.colorScheme.primary,
@@ -222,19 +232,22 @@ fun LibraryScreen(
                 contentPadding = PaddingValues(
                     start = 20.dp,
                     end = 20.dp,
-                    top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 12.dp,
+                    top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 8.dp,
                     bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 104.dp,
                 ),
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
-                verticalArrangement = Arrangement.spacedBy(22.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp),
                 modifier = Modifier.fillMaxSize(),
             ) {
                 item(span = { GridItemSpan(maxLineSpan) }, key = "header") {
                     Header(
                         count = allBooks.size,
                         importing = importing,
-                        sort = sort,
-                        onSort = vm::setSort,
+                        searching = searching,
+                        onSearch = {
+                            if (searching) vm.query.value = ""
+                            searching = !searching
+                        },
                         onStats = { showStats = true },
                         onDisplay = { showDisplay = true },
                         onWords = { showWords = true },
@@ -244,8 +257,12 @@ fun LibraryScreen(
                         onRestore = restore,
                     )
                 }
-                item(span = { GridItemSpan(maxLineSpan) }, key = "search") {
-                    SearchField(query = query, onQuery = { vm.query.value = it })
+                if (searching) {
+                    item(span = { GridItemSpan(maxLineSpan) }, key = "search") {
+                        val focus = remember { FocusRequester() }
+                        SearchField(query = query, onQuery = { vm.query.value = it }, modifier = Modifier.focusRequester(focus))
+                        LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+                    }
                 }
                 if (continueReading.isNotEmpty() && query.isBlank()) {
                     item(span = { GridItemSpan(maxLineSpan) }, key = "continue") {
@@ -259,6 +276,10 @@ fun LibraryScreen(
                         collections = collections,
                         onShelf = vm::showShelf,
                         onCollection = vm::showCollection,
+                        sort = sort,
+                        onSort = vm::setSort,
+                        shelfView = shelfView,
+                        onShelfView = { on -> vm.updateDisplay { it.copy(shelfView = on) } },
                     )
                 }
                 if (books.isEmpty()) {
@@ -274,7 +295,21 @@ fun LibraryScreen(
                         )
                     }
                 }
-                items(books, key = { it.id }) { book ->
+                if (shelfView) {
+                    shelves.forEachIndexed { index, row ->
+                        item(span = { GridItemSpan(maxLineSpan) }, key = "shelf-" + row.first().id) {
+                            ShelfRow(
+                                books = row,
+                                vm = vm,
+                                onOpen = { onOpen(it.id) },
+                                onDelete = { pendingDelete = it },
+                                onCollections = { editingCollections = it },
+                                onEdit = { editingDetails = it },
+                                modifier = Modifier.animateItem().entrance(index, intro),
+                            )
+                        }
+                    }
+                } else items(books, key = { it.id }) { book ->
                     val index = books.indexOf(book)
                     BookTile(
                         book = book,
@@ -322,7 +357,6 @@ fun LibraryScreen(
         )
     }
     if (showDisplay) {
-        val display by vm.display.collectAsStateWithLifecycle()
         SettingsSheet(
             settings = display,
             scrollMode = display.scrollDefault,
@@ -424,19 +458,12 @@ private fun Modifier.entrance(index: Int, play: Boolean): Modifier {
     }
 }
 
-private fun greeting(): String = when (Calendar.getInstance().get(Calendar.HOUR_OF_DAY)) {
-    in 5..11 -> "Good morning"
-    in 12..16 -> "Good afternoon"
-    in 17..21 -> "Good evening"
-    else -> "Reading late?"
-}
-
 @Composable
 private fun Header(
     count: Int,
     importing: Boolean,
-    sort: SortOrder,
-    onSort: (SortOrder) -> Unit,
+    searching: Boolean,
+    onSearch: () -> Unit,
     onStats: () -> Unit,
     onDisplay: () -> Unit,
     onWords: () -> Unit,
@@ -445,30 +472,40 @@ private fun Header(
     onBackUp: () -> Unit,
     onRestore: () -> Unit,
 ) {
-    var menuOpen by remember { mutableStateOf(false) }
     var moreOpen by remember { mutableStateOf(false) }
     Column {
-        // Greeting and actions on one line, so the title below gets the full width.
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                greeting(),
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            IconButton(onClick = onDisplay) {
-                Icon(ReaderIcons.Brightness, contentDescription = "Display and light", tint = MaterialTheme.colorScheme.primary)
+            Column(Modifier.weight(1f)) {
+                Text("Library", style = MaterialTheme.typography.headlineMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    if (count == 1) "1 book" else "$count books",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            IconButton(onClick = onSearch) {
+                Icon(
+                    if (searching) Icons.Filled.Close else Icons.Filled.Search,
+                    contentDescription = if (searching) "Close search" else "Search",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             IconButton(onClick = onStats) {
-                Icon(LibraryIcons.Stats, contentDescription = "Reading stats", tint = MaterialTheme.colorScheme.primary)
+                Icon(LibraryIcons.Stats, contentDescription = "Reading stats", tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Box {
                 IconButton(onClick = { moreOpen = true }) {
-                    Icon(Icons.Filled.MoreVert, contentDescription = "More options", tint = MaterialTheme.colorScheme.primary)
+                    Icon(Icons.Filled.MoreVert, contentDescription = "More options", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 DropdownMenu(expanded = moreOpen, onDismissRequest = { moreOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Display and light") },
+                        leadingIcon = { Icon(ReaderIcons.Brightness, contentDescription = null) },
+                        onClick = {
+                            moreOpen = false
+                            onDisplay()
+                        },
+                    )
                     DropdownMenuItem(
                         text = { Text("Word list") },
                         onClick = {
@@ -509,38 +546,11 @@ private fun Header(
                 }
             }
         }
-        Text("Your library", style = MaterialTheme.typography.displaySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                if (count == 1) "1 book" else "$count books",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f),
-            )
-            Box {
-                TextButton(onClick = { menuOpen = true }) { Text(sort.label) }
-                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                    SortOrder.entries.forEach { option ->
-                        DropdownMenuItem(
-                            text = { Text(option.label) },
-                            leadingIcon = {
-                                if (option == sort) Icon(Icons.Filled.Check, contentDescription = null)
-                                else Spacer(Modifier.size(24.dp))
-                            },
-                            onClick = {
-                                onSort(option)
-                                menuOpen = false
-                            },
-                        )
-                    }
-                }
-            }
-        }
         AnimatedVisibility(importing) {
             LinearProgressIndicator(
                 Modifier
                     .fillMaxWidth()
-                    .padding(top = 12.dp)
+                    .padding(top = 8.dp)
                     .clip(CircleShape),
             )
         }
@@ -548,7 +558,12 @@ private fun Header(
 }
 
 @Composable
-internal fun SearchField(query: String, onQuery: (String) -> Unit, placeholder: String = "Search titles and authors") {
+internal fun SearchField(
+    query: String,
+    onQuery: (String) -> Unit,
+    placeholder: String = "Search titles and authors",
+    modifier: Modifier = Modifier,
+) {
     Surface(
         shape = CircleShape,
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -582,7 +597,7 @@ internal fun SearchField(query: String, onQuery: (String) -> Unit, placeholder: 
                     singleLine = true,
                     textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
                     cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = modifier.fillMaxWidth(),
                 )
             }
             if (query.isNotEmpty()) {
@@ -597,8 +612,8 @@ internal fun SearchField(query: String, onQuery: (String) -> Unit, placeholder: 
 @Composable
 private fun ContinueReadingRow(books: List<Book>, vm: LibraryViewModel, onOpen: (String) -> Unit) {
     Column {
-        Text("Continue reading", style = MaterialTheme.typography.titleLarge)
-        Spacer(Modifier.height(12.dp))
+        Text("Continue reading", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.height(8.dp))
         LazyRow(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             // Let cards scroll edge to edge past the grid's side padding.
@@ -627,33 +642,33 @@ private fun ContinueCard(book: Book, vm: LibraryViewModel, onOpen: (String) -> U
     val scheme = MaterialTheme.colorScheme
     Surface(
         onClick = { onOpen(book.id) },
-        shape = RoundedCornerShape(28.dp),
+        shape = RoundedCornerShape(20.dp),
         color = scheme.primaryContainer,
         contentColor = scheme.onPrimaryContainer,
-        modifier = Modifier.width(if (single) 340.dp else 300.dp),
+        modifier = Modifier.width(if (single) (LocalConfiguration.current.screenWidthDp - 40).dp else 280.dp),
     ) {
         Box(
             Modifier.background(
                 Brush.linearGradient(listOf(scheme.primaryContainer, scheme.secondaryContainer.copy(alpha = 0.6f))),
             ),
         ) {
-            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 BookCover(
                     title = book.title,
                     author = book.author,
                     file = vm.coverFile(book),
                     modifier = Modifier
-                        .width(86.dp)
+                        .width(52.dp)
                         .aspectRatio(2f / 3f)
-                        .shadow(10.dp, CoverShape)
+                        .shadow(6.dp, CoverShape)
                         .clip(CoverShape),
                 )
-                Spacer(Modifier.width(16.dp))
+                Spacer(Modifier.width(14.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
                         book.title,
-                        style = MaterialTheme.typography.titleLarge,
-                        maxLines = 2,
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                     if (book.author != null) {
@@ -665,28 +680,31 @@ private fun ContinueCard(book: Book, vm: LibraryViewModel, onOpen: (String) -> U
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
-                    Spacer(Modifier.height(14.dp))
-                    LinearProgressIndicator(
-                        progress = { grow.value },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(6.dp)
-                            .clip(CircleShape),
-                        color = scheme.primary,
-                        trackColor = scheme.onPrimaryContainer.copy(alpha = 0.12f),
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        "${(book.progress * 100).roundToInt()}% " + if (book.isAudio) "listened" else "read",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = scheme.onPrimaryContainer.copy(alpha = 0.8f),
-                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        LinearProgressIndicator(
+                            progress = { grow.value },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(4.dp)
+                                .clip(CircleShape),
+                            color = scheme.primary,
+                            trackColor = scheme.onPrimaryContainer.copy(alpha = 0.12f),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "${(book.progress * 100).roundToInt()}%",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = scheme.onPrimaryContainer.copy(alpha = 0.8f),
+                        )
+                    }
                 }
             }
         }
     }
 }
 
+/** Which books show (shelves and collections), how they're ordered, and covers or a bookshelf. */
 @Composable
 private fun ShelfChips(
     shelf: Shelf,
@@ -694,36 +712,69 @@ private fun ShelfChips(
     collections: List<String>,
     onShelf: (Shelf) -> Unit,
     onCollection: (String) -> Unit,
+    sort: SortOrder,
+    onSort: (SortOrder) -> Unit,
+    shelfView: Boolean,
+    onShelfView: (Boolean) -> Unit,
 ) {
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier
-            .layoutBleed(20.dp)
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp)
-            .padding(top = 4.dp),
-    ) {
-        Shelf.entries.forEach { option ->
-            FilterChip(
-                selected = collection == null && shelf == option,
-                onClick = { onShelf(option) },
-                label = { Text(option.label) },
-                shape = CircleShape,
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
-                ),
-            )
+    var sortOpen by remember { mutableStateOf(false) }
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier
+                .weight(1f)
+                .clip(RoundedCornerShape(topEnd = 16.dp, bottomEnd = 16.dp))
+                .horizontalScroll(rememberScrollState()),
+        ) {
+            Shelf.entries.forEach { option ->
+                FilterChip(
+                    selected = collection == null && shelf == option,
+                    onClick = { onShelf(option) },
+                    label = { Text(option.label) },
+                    shape = CircleShape,
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                    ),
+                )
+            }
+            collections.forEach { name ->
+                FilterChip(
+                    selected = collection == name,
+                    onClick = { onCollection(name) },
+                    label = { Text(name) },
+                    leadingIcon = { Icon(LibraryIcons.Collection, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                    shape = CircleShape,
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                    ),
+                )
+            }
         }
-        collections.forEach { name ->
-            FilterChip(
-                selected = collection == name,
-                onClick = { onCollection(name) },
-                label = { Text(name) },
-                leadingIcon = { Icon(LibraryIcons.Collection, contentDescription = null, modifier = Modifier.size(16.dp)) },
-                shape = CircleShape,
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = MaterialTheme.colorScheme.tertiaryContainer,
-                ),
+        Box {
+            IconButton(onClick = { sortOpen = true }) {
+                Icon(LibraryIcons.Sort, contentDescription = "Order: ${sort.label}", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            DropdownMenu(expanded = sortOpen, onDismissRequest = { sortOpen = false }) {
+                SortOrder.entries.forEach { option ->
+                    DropdownMenuItem(
+                        text = { Text(option.label) },
+                        leadingIcon = {
+                            if (option == sort) Icon(Icons.Filled.Check, contentDescription = null)
+                            else Spacer(Modifier.size(24.dp))
+                        },
+                        onClick = {
+                            onSort(option)
+                            sortOpen = false
+                        },
+                    )
+                }
+            }
+        }
+        IconButton(onClick = { onShelfView(!shelfView) }, modifier = Modifier.offset(x = 8.dp)) {
+            Icon(
+                if (shelfView) LibraryIcons.Grid else LibraryIcons.Shelf,
+                contentDescription = if (shelfView) "Show covers" else "Show as a bookshelf",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
@@ -741,7 +792,6 @@ private fun BookTile(
     modifier: Modifier = Modifier,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
-    val context = LocalContext.current
     val grow = rememberGrow(book.progress)
     Column(modifier) {
         Box {
@@ -847,54 +897,79 @@ private fun BookTile(
                         modifier = Modifier.size(20.dp),
                     )
                 }
-                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }, offset = DpOffset((-8).dp, 0.dp)) {
-                        if (book.lastOpenedAt > 0) {
-                            DropdownMenuItem(
-                                text = { Text("Mark as unread") },
-                                leadingIcon = { Icon(Icons.Filled.Refresh, contentDescription = null) },
-                                onClick = {
-                                    menuOpen = false
-                                    vm.markUnread(book)
-                                },
-                            )
-                        }
-                        DropdownMenuItem(
-                            text = { Text("Details and rating…") },
-                            leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
-                            onClick = {
-                                menuOpen = false
-                                onEdit()
-                            },
-                        )
-                        if (book.highlights.isNotEmpty()) {
-                            DropdownMenuItem(
-                                text = { Text("Share highlights") },
-                                leadingIcon = { Icon(Icons.Filled.Share, contentDescription = null) },
-                                onClick = {
-                                    menuOpen = false
-                                    HighlightExport.share(context, book)
-                                },
-                            )
-                        }
-                        DropdownMenuItem(
-                            text = { Text("Collections…") },
-                            leadingIcon = { Icon(LibraryIcons.Collection, contentDescription = null) },
-                            onClick = {
-                                menuOpen = false
-                                onCollections()
-                            },
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Remove from library") },
-                            leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null) },
-                            onClick = {
-                                menuOpen = false
-                                onDelete()
-                            },
-                        )
-                    }
+                BookMenu(
+                    book = book,
+                    vm = vm,
+                    expanded = menuOpen,
+                    onDismiss = { menuOpen = false },
+                    onDelete = onDelete,
+                    onCollections = onCollections,
+                    onEdit = onEdit,
+                    offset = DpOffset((-8).dp, 0.dp),
+                )
             }
         }
+    }
+}
+
+/** A book's menu: from the ⋮ under its cover, a long-press on the cover, or a long-press on its spine. */
+@Composable
+internal fun BookMenu(
+    book: Book,
+    vm: LibraryViewModel,
+    expanded: Boolean,
+    onDismiss: () -> Unit,
+    onDelete: () -> Unit,
+    onCollections: () -> Unit,
+    onEdit: () -> Unit,
+    offset: DpOffset = DpOffset(0.dp, 0.dp),
+) {
+    val context = LocalContext.current
+    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss, offset = offset) {
+        if (book.lastOpenedAt > 0) {
+            DropdownMenuItem(
+                text = { Text("Mark as unread") },
+                leadingIcon = { Icon(Icons.Filled.Refresh, contentDescription = null) },
+                onClick = {
+                    onDismiss()
+                    vm.markUnread(book)
+                },
+            )
+        }
+        DropdownMenuItem(
+            text = { Text("Details and rating…") },
+            leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
+            onClick = {
+                onDismiss()
+                onEdit()
+            },
+        )
+        if (book.highlights.isNotEmpty()) {
+            DropdownMenuItem(
+                text = { Text("Share highlights") },
+                leadingIcon = { Icon(Icons.Filled.Share, contentDescription = null) },
+                onClick = {
+                    onDismiss()
+                    HighlightExport.share(context, book)
+                },
+            )
+        }
+        DropdownMenuItem(
+            text = { Text("Collections…") },
+            leadingIcon = { Icon(LibraryIcons.Collection, contentDescription = null) },
+            onClick = {
+                onDismiss()
+                onCollections()
+            },
+        )
+        DropdownMenuItem(
+            text = { Text("Remove from library") },
+            leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null) },
+            onClick = {
+                onDismiss()
+                onDelete()
+            },
+        )
     }
 }
 

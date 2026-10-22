@@ -44,6 +44,10 @@ data class ReaderSettings(
     val voice: String? = null,
     /** How the library grid is ordered (a SortOrder name). */
     val librarySort: String = "Recent",
+    /** The library shows books as spines on wooden shelves instead of a grid of covers. */
+    val shelfView: Boolean = false,
+    /** PDFs open in the page view instead of as text (each can still switch while open). */
+    val pdfOpenAsPages: Boolean = false,
     /** Books open by scrolling rather than in pages, unless a book says otherwise. */
     val scrollDefault: Boolean = false,
     /** Scrolling mode: a band that marks the reading line. */
@@ -90,6 +94,8 @@ class SettingsRepository(context: Context) {
             .putFloat("speechRate", next.speechRate)
             .putString("voice", next.voice)
             .putString("librarySort", next.librarySort)
+            .putBoolean("shelfView", next.shelfView)
+            .putBoolean("pdfOpenAsPages", next.pdfOpenAsPages)
             .putBoolean("scrollDefault", next.scrollDefault)
             .putBoolean("ruler", next.ruler)
             .putFloat("autoScrollSpeed", next.autoScrollSpeed)
@@ -146,6 +152,8 @@ class SettingsRepository(context: Context) {
             speechRate = prefs.getFloat("speechRate", d.speechRate),
             voice = prefs.getString("voice", null),
             librarySort = prefs.getString("librarySort", null) ?: d.librarySort,
+            shelfView = prefs.getBoolean("shelfView", d.shelfView),
+            pdfOpenAsPages = prefs.getBoolean("pdfOpenAsPages", d.pdfOpenAsPages),
             scrollDefault = prefs.getBoolean("scrollDefault", d.scrollDefault),
             ruler = prefs.getBoolean("ruler", d.ruler),
             autoScrollSpeed = prefs.getFloat("autoScrollSpeed", d.autoScrollSpeed),

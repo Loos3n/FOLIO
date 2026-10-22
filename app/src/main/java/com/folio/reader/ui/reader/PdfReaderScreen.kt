@@ -159,7 +159,7 @@ class PdfReaderViewModel(private val app: FolioApp, private val bookId: String) 
         val entry = library.get(bookId)
         when {
             entry == null -> _state.update { it.copy(loading = false, error = "This book is no longer in your library.") }
-            entry.pdfPages -> viewModelScope.launch { openPages() }
+            entry.pdfPages || app.settings.settings.value.pdfOpenAsPages -> viewModelScope.launch { openPages() }
             library.textReady(entry) -> _state.update { it.copy(openText = true) }
             else -> readAsText()
         }

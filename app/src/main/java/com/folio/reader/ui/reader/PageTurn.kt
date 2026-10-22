@@ -24,6 +24,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.MotionDurationScale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
@@ -37,6 +38,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 
@@ -127,7 +129,12 @@ class PageTurner {
             if (image == null) return@launch
             val to = if (commit) 1f else 0f
             val distance = kotlin.math.abs(to - progress)
-            animate(progress, to, animationSpec = tween((420 + 480 * distance).toInt(), easing = TURN_EASING)) { v, _ -> progress = v }
+            // At full length even when the phone's animations are turned down or off (as some
+            // battery savers do): otherwise the page jumps the moment the finger lifts, and the
+            // turn is only ever seen while dragging slowly. Page turn: Off in Display still skips it.
+            withContext(FullSpeed) {
+                animate(progress, to, animationSpec = tween((420 + 480 * distance).toInt(), easing = TURN_EASING)) { v, _ -> progress = v }
+            }
             if (!commit) {
                 covering = true
                 undo()
@@ -155,6 +162,9 @@ class PageTurner {
     companion object {
         private const val TAG = "FolioTurn"
         private val TURN_EASING = CubicBezierEasing(0.35f, 0.0f, 0.25f, 1f)
+        private val FullSpeed = object : MotionDurationScale {
+            override val scaleFactor = 1f
+        }
     }
 }
 
