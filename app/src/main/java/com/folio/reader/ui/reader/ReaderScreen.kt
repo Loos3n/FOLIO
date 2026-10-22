@@ -1610,6 +1610,7 @@ internal fun SettingsSheet(
                     ) { Text(label) }
                 }
             }
+            SwitchRow("Open PDFs as pages", settings.pdfOpenAsPages) { on -> onChange { it.copy(pdfOpenAsPages = on) } }
             if (scrollMode) {
                 SwitchRow("Reading ruler", settings.ruler) { on -> onChange { it.copy(ruler = on) } }
             } else {

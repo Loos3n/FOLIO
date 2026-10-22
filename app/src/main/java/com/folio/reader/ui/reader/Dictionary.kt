@@ -1,5 +1,8 @@
 package com.folio.reader.ui.reader
 
+import org.json.JSONObject
+import android.util.Log
+import android.text.Html
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -34,28 +37,73 @@ object Dictionary {
     suspend fun lookUp(term: String): Lookup {
         val key = term.lowercase()
         synchronized(cache) { cache[key] }?.let { return it }
-        val result = withContext(Dispatchers.IO) {
-            val url = URL("https://api.dictionaryapi.dev/api/v2/entries/en/" + URLEncoder.encode(key, "UTF-8").replace("+", "%20"))
-            val conn = url.openConnection() as HttpURLConnection
-            try {
-                conn.connectTimeout = 8_000
-                conn.readTimeout = 8_000
-                when (conn.responseCode) {
-                    404 -> Lookup.NotFound
-                    200 -> parse(conn.inputStream.bufferedReader().readText())?.let { Lookup.Found(it) } ?: Lookup.NotFound
-                    else -> Lookup.Offline
-                }
-            } catch (e: FileNotFoundException) {
-                Lookup.NotFound
-            } catch (e: Exception) {
-                Lookup.Offline
-            } finally {
-                conn.disconnect()
-            }
+        // The free dictionary first (it has pronunciations); Wiktionary when that one is down,
+        // busy or doesn't know the word.
+        var result = withContext(Dispatchers.IO) { fetch(primaryUrl(key)) { parse(it) } }
+        if (result !is Lookup.Found) {
+            val second = withContext(Dispatchers.IO) { fetch(wiktionaryUrl(key)) { parseWiktionary(key, it) } }
+            if (second is Lookup.Found || result is Lookup.Offline) result = second
         }
         if (result !is Lookup.Offline) synchronized(cache) { cache[key] = result }
         return result
     }
+
+    private fun encode(word: String) = URLEncoder.encode(word, "UTF-8").replace("+", "%20")
+
+    private fun primaryUrl(key: String) = "https://api.dictionaryapi.dev/api/v2/entries/en/" + encode(key)
+
+    private fun wiktionaryUrl(key: String) = "https://en.wiktionary.org/api/rest_v1/page/definition/" + encode(key)
+
+    /** GETs [url]: Found when [parse] makes sense of it, NotFound on a 404, Offline otherwise. */
+    private fun fetch(url: String, parse: (String) -> Definition?): Lookup {
+        val conn = URL(url).openConnection() as HttpURLConnection
+        return try {
+            conn.connectTimeout = 8_000
+            conn.readTimeout = 8_000
+            // Wikimedia asks apps to say who they are.
+            conn.setRequestProperty("User-Agent", "Folio/1.0 (Android e-reader)")
+            conn.setRequestProperty("Accept", "application/json")
+            when (val code = conn.responseCode) {
+                404 -> Lookup.NotFound
+                200 -> parse(conn.inputStream.bufferedReader().readText())?.let { Lookup.Found(it) } ?: Lookup.NotFound
+                else -> {
+                    Log.w("FolioDictionary", "$url answered $code")
+                    Lookup.Offline
+                }
+            }
+        } catch (e: FileNotFoundException) {
+            Lookup.NotFound
+        } catch (e: Exception) {
+            Log.w("FolioDictionary", "Couldn't reach $url", e)
+            Lookup.Offline
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    /** Wiktionary's definitions: {"en": [{partOfSpeech, definitions: [{definition, examples}]}], ...} in HTML. */
+    private fun parseWiktionary(word: String, json: String): Definition? = runCatching {
+        val english = JSONObject(json).optJSONArray("en") ?: return null
+        val byPart = LinkedHashMap<String, MutableList<Pair<String, String?>>>()
+        for (i in 0 until english.length()) {
+            val entry = english.getJSONObject(i)
+            val list = byPart.getOrPut(entry.optString("partOfSpeech").lowercase()) { mutableListOf() }
+            val defs = entry.optJSONArray("definitions") ?: continue
+            for (d in 0 until defs.length()) {
+                if (list.size >= 4) break
+                val def = defs.getJSONObject(d)
+                val text = plain(def.optString("definition"))
+                if (text.isBlank()) continue
+                val example = def.optJSONArray("examples")?.optString(0)?.let(::plain)?.takeIf { it.isNotBlank() }
+                list += text to example
+            }
+        }
+        val meanings = byPart.filter { it.key.isNotBlank() && it.value.isNotEmpty() }.map { (part, defs) -> Meaning(part, defs) }
+        if (meanings.isEmpty()) null else Definition(word, null, meanings)
+    }.getOrNull()
+
+    private fun plain(html: String): String =
+        Html.fromHtml(html, Html.FROM_HTML_MODE_LEGACY).toString().replace(Regex("\\s+"), " ").trim()
 
     private fun parse(json: String): Definition? = runCatching {
         val entries = JSONArray(json)
