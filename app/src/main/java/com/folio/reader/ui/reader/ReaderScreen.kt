@@ -1701,7 +1701,7 @@ internal fun SettingsSheet(
             }
 
             Spacer(Modifier.height(2.dp))
-            SwitchRow("Justify text", settings.justify) { on -> onChange { it.copy(justify = on) } }
+            SwitchRow("Justify and hyphenate", settings.justify) { on -> onChange { it.copy(justify = on) } }
             SwitchRow("Turn pages by tapping the edges", settings.tapToTurn) { on -> onChange { it.copy(tapToTurn = on) } }
             SwitchRow("Turn pages with volume buttons", settings.volumeKeys) { on -> onChange { it.copy(volumeKeys = on) } }
         }

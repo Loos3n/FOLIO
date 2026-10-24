@@ -241,7 +241,9 @@ object ReaderContent {
             append(".folio-find div{box-shadow:inset 0 0 0 999px ${link}40;}")
             // .folio-p marks the book's ordinary body paragraphs (not centred or right-aligned ones),
             // so the justify setting applies both ways without flattening title pages.
-            if (settings.justify) append(".folio-p{text-align:justify !important;text-align-last:start;}")
+            // Justified lines hyphenate long words (not short ones, and not into tiny fragments)
+            // so the spacing between words stays even.
+            if (settings.justify) append(".folio-p{text-align:justify !important;text-align-last:start;hyphenate-limit-chars:6 3 3;}")
             else append(".folio-p{text-align:start !important;}")
             val own = settings.customFont
             if (own != null) {
@@ -392,7 +394,8 @@ object ReaderContent {
           function prepare() {
             if (prepared || !document.body) return;
             prepared = true;
-            if (params.l && !root.getAttribute('lang')) root.setAttribute('lang', params.l);
+            // Hyphenation needs a language; most books without one are in English.
+            if (!root.getAttribute('lang')) root.setAttribute('lang', params.l || 'en');
             // Paragraphs with no first-line indent and no space between them read as one block.
             var ps = document.body.getElementsByTagName('p'), plain = 0, sampled = 0;
             // Read each paragraph's own alignment with our stylesheet switched off.

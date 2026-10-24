@@ -98,6 +98,9 @@ import com.folio.reader.FolioApp
 import com.folio.reader.audio.ListenState
 import com.folio.reader.ui.listen.ListenIcons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.activity.compose.BackHandler
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
@@ -135,7 +138,12 @@ fun LibraryScreen(
     val collection by vm.collection.collectAsStateWithLifecycle()
     val collections by vm.collections.collectAsStateWithLifecycle()
     val display by vm.display.collectAsStateWithLifecycle()
-    val shelfView = display.shelfView
+    val stacks by vm.stacks.collectAsStateWithLifecycle()
+    val openSeries by vm.openSeries.collectAsStateWithLifecycle()
+    BackHandler(enabled = openSeries != null) { vm.closeSeries() }
+    // In an open series, the book to read next (first not finished) is marked.
+    val upNext = if (openSeries != null) books.firstOrNull { !it.isFinished() } else null
+    val shelfView = display.shelfView && openSeries == null
     val shelfWidth = LocalConfiguration.current.screenWidthDp - 52
     val shelves = remember(books, shelfView, shelfWidth) { if (shelfView) shelfRows(books, shelfWidth) else emptyList() }
     var showStats by remember { mutableStateOf(false) }
@@ -264,12 +272,16 @@ fun LibraryScreen(
                         LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
                     }
                 }
-                if (continueReading.isNotEmpty() && query.isBlank()) {
+                if (openSeries != null) {
+                    item(span = { GridItemSpan(maxLineSpan) }, key = "series") {
+                        SeriesHeader(name = books.firstOrNull()?.series ?: openSeries!!, books = books, onBack = vm::closeSeries)
+                    }
+                } else if (continueReading.isNotEmpty() && query.isBlank()) {
                     item(span = { GridItemSpan(maxLineSpan) }, key = "continue") {
                         ContinueReadingRow(continueReading, vm, onOpen)
                     }
                 }
-                item(span = { GridItemSpan(maxLineSpan) }, key = "shelves") {
+                if (openSeries == null) item(span = { GridItemSpan(maxLineSpan) }, key = "shelves") {
                     ShelfChips(
                         shelf = shelf,
                         collection = collection,
@@ -280,6 +292,8 @@ fun LibraryScreen(
                         onSort = vm::setSort,
                         shelfView = shelfView,
                         onShelfView = { on -> vm.updateDisplay { it.copy(shelfView = on) } },
+                        groupSeries = display.groupSeries,
+                        onGroupSeries = { on -> vm.updateDisplay { it.copy(groupSeries = on) } },
                     )
                 }
                 if (books.isEmpty()) {
@@ -311,10 +325,13 @@ fun LibraryScreen(
                     }
                 } else items(books, key = { it.id }) { book ->
                     val index = books.indexOf(book)
+                    val stack = stacks[book.id]
                     BookTile(
                         book = book,
                         vm = vm,
-                        onOpen = { onOpen(book.id) },
+                        stack = stack,
+                        upNext = book == upNext && book.lastOpenedAt == 0L,
+                        onOpen = { if (stack != null) vm.openSeries(stack.name) else onOpen(book.id) },
                         onDelete = { pendingDelete = book },
                         onCollections = { editingCollections = book },
                         onEdit = { editingDetails = book },
@@ -681,7 +698,16 @@ private fun ContinueCard(book: Book, vm: LibraryViewModel, onOpen: (String) -> U
                         )
                     }
                     Spacer(Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    // A suggested next book in a series hasn't been started, so it says why it's here.
+                    if (book.lastOpenedAt == 0L) {
+                        Text(
+                            "Next in " + (book.series ?: "series") + (book.seriesIndex?.let { " · Book " + seriesNumber(it) } ?: ""),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = scheme.primary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    } else Row(verticalAlignment = Alignment.CenterVertically) {
                         LinearProgressIndicator(
                             progress = { grow.value },
                             modifier = Modifier
@@ -716,6 +742,8 @@ private fun ShelfChips(
     onSort: (SortOrder) -> Unit,
     shelfView: Boolean,
     onShelfView: (Boolean) -> Unit,
+    groupSeries: Boolean,
+    onGroupSeries: (Boolean) -> Unit,
 ) {
     var sortOpen by remember { mutableStateOf(false) }
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
@@ -768,6 +796,18 @@ private fun ShelfChips(
                         },
                     )
                 }
+                HorizontalDivider()
+                DropdownMenuItem(
+                    text = { Text("Stack series") },
+                    leadingIcon = {
+                        if (groupSeries) Icon(Icons.Filled.Check, contentDescription = null)
+                        else Spacer(Modifier.size(24.dp))
+                    },
+                    onClick = {
+                        onGroupSeries(!groupSeries)
+                        sortOpen = false
+                    },
+                )
             }
         }
         IconButton(onClick = { onShelfView(!shelfView) }, modifier = Modifier.offset(x = 8.dp)) {
@@ -780,10 +820,31 @@ private fun ShelfChips(
     }
 }
 
+/** The top of an opened series: its name, how far through it the reader is, and a way back. */
+@Composable
+private fun SeriesHeader(name: String, books: List<Book>, onBack: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        IconButton(onClick = onBack, modifier = Modifier.offset(x = (-12).dp)) {
+            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to library")
+        }
+        Column(Modifier.weight(1f)) {
+            Text(name, style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            val done = books.count { it.isFinished() }
+            Text(
+                "${books.size} books · $done read",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
 @Composable
 private fun BookTile(
     book: Book,
     vm: LibraryViewModel,
+    stack: SeriesStack?,
+    upNext: Boolean,
     onOpen: () -> Unit,
     onDelete: () -> Unit,
     onCollections: () -> Unit,
@@ -795,6 +856,28 @@ private fun BookTile(
     val grow = rememberGrow(book.progress)
     Column(modifier) {
         Box {
+            // A series shows as a little pile: the next book on top, the edges of the rest behind it.
+            if (stack != null) {
+                for (layer in 2 downTo 1) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(2f / 3f)
+                            .graphicsLayer {
+                                translationX = (layer * 5).dp.toPx()
+                                translationY = (-layer * 5).dp.toPx()
+                                scaleX = 1f - layer * 0.04f
+                                scaleY = 1f - layer * 0.04f
+                            }
+                            .shadow(3.dp, CoverShape)
+                            .clip(CoverShape)
+                            .background(
+                                if (layer == 1) MaterialTheme.colorScheme.surfaceContainerHighest
+                                else MaterialTheme.colorScheme.surfaceContainerHigh,
+                            ),
+                    )
+                }
+            }
             Box(
                 Modifier
                     .fillMaxWidth()
@@ -819,7 +902,9 @@ private fun BookTile(
                     }
                 }
                 when {
+                    stack != null -> Badge("${stack.books.size} books", Modifier.align(Alignment.TopEnd))
                     book.isFinished() -> Badge("Finished", Modifier.align(Alignment.TopEnd), icon = true)
+                    upNext -> Badge("Up next", Modifier.align(Alignment.TopEnd))
                     book.lastOpenedAt == 0L -> Badge("New", Modifier.align(Alignment.TopEnd))
                 }
             }
@@ -860,7 +945,25 @@ private fun BookTile(
             Spacer(Modifier.height(10.dp))
         }
         Row {
-            Column(Modifier.weight(1f)) {
+            if (stack != null) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        stack.name,
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    val done = stack.books.count { it.isFinished() }
+                    Text(
+                        if (done == stack.books.size) "All ${stack.books.size} read"
+                        else "Next: " + (book.seriesIndex?.let { "Book " + seriesNumber(it) } ?: book.title),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            } else Column(Modifier.weight(1f)) {
                 Text(
                     book.title,
                     style = MaterialTheme.typography.titleSmall,

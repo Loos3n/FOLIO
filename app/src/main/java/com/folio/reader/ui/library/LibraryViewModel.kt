@@ -34,6 +34,17 @@ enum class SortOrder(val label: String) {
 fun Book.isFinished() = progress >= 0.995f
 fun Book.isReading() = lastOpenedAt > 0 && !isFinished()
 
+/** Books of one series shown as a single stack in the library, topped by the one to read next. */
+data class SeriesStack(val name: String, val books: List<Book>, val next: Book)
+
+/** The series' books in order, and the one to read next: the first not yet finished (else the last). */
+private fun stackOf(books: List<Book>): SeriesStack {
+    val ordered = books.sortedWith(compareBy<Book> { it.seriesIndex ?: Float.MAX_VALUE }.thenBy { it.title.lowercase() })
+    return SeriesStack(ordered.first().series!!, ordered, ordered.firstOrNull { !it.isFinished() } ?: ordered.last())
+}
+
+private fun seriesKey(book: Book) = book.series?.trim()?.lowercase()
+
 sealed interface LibraryEvent {
     data class Message(val text: String) : LibraryEvent
     data class Open(val bookId: String) : LibraryEvent
@@ -55,6 +66,8 @@ class LibraryViewModel(private val app: FolioApp) : ViewModel() {
     val shelf = MutableStateFlow(Shelf.All)
     /** One of the reader's own collections to show instead of a shelf, or null. */
     val collection = MutableStateFlow<String?>(null)
+    /** A series opened from its stack: the grid shows just its books, in order. */
+    val openSeries = MutableStateFlow<String?>(null)
     val sort = MutableStateFlow(
         SortOrder.entries.firstOrNull { it.name == app.settings.settings.value.librarySort } ?: SortOrder.Recent,
     )
@@ -132,15 +145,79 @@ class LibraryViewModel(private val app: FolioApp) : ViewModel() {
         }
     }
 
-    /** Books still being read, most recent first, for the "Continue reading" row. */
+    /**
+     * Books still being read, most recent first, for the "Continue reading" row; then, for a
+     * series whose latest book was finished, the next one if it hasn't been started.
+     */
     val continueReading: StateFlow<List<Book>> = library.books
-        .map { list -> list.filter { it.isReading() }.sortedByDescending { it.lastOpenedAt }.take(8) }
+        .map { list ->
+            val reading = list.filter { it.isReading() }.sortedByDescending { it.lastOpenedAt }
+            val upNext = upNext(list).filter { it !in reading }
+            (reading + upNext).take(8)
+        }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
-    /** The grid: filtered by shelf and search, in the chosen order. */
-    val books: StateFlow<List<Book>> = combine(library.books, query, shelf, sort, collection) { list, q, s, order, c ->
-        val needle = q.trim()
-        list
+    /** For each series, the unstarted book that follows the last one finished, latest finish first. */
+    private fun upNext(list: List<Book>): List<Book> =
+        list.filter { it.series != null }.groupBy { seriesKey(it) }.values.mapNotNull { books ->
+            val ordered = stackOf(books).books
+            val last = ordered.indexOfLast { it.isFinished() }
+            if (last < 0 || ordered.any { it.isReading() }) return@mapNotNull null
+            ordered.drop(last + 1).firstOrNull { it.lastOpenedAt == 0L }?.let { it to ordered[last].finishedAt }
+        }.sortedByDescending { it.second }.map { it.first }
+
+    fun openSeries(name: String) {
+        openSeries.value = name
+    }
+
+    fun closeSeries() {
+        openSeries.value = null
+    }
+
+    private val filters = combine(query, shelf, sort, collection, openSeries) { q, s, order, c, open -> Filters(q.trim(), s, order, c, open) }
+
+    private data class Filters(val needle: String, val shelf: Shelf, val order: SortOrder, val collection: String?, val series: String?)
+
+    /** Grid books with each series folded into its next book, and the stacks those stand for. */
+    private val grid: StateFlow<Pair<List<Book>, Map<String, SeriesStack>>> = combine(library.books, filters, app.settings.settings) { list, f, settings ->
+        val sorted = sortAndFilter(list, f)
+        if (f.series != null) {
+            val key = f.series.trim().lowercase()
+            val members = list.filter { seriesKey(it) == key }
+            if (members.isNotEmpty()) return@combine stackOf(members).books to emptyMap()
+        }
+        // Stacks only in the plain covers grid: a search, or the bookshelf, shows every book.
+        if (!settings.groupSeries || settings.shelfView || f.needle.isNotEmpty()) return@combine sorted to emptyMap()
+        val stacks = sorted.filter { it.series != null }.groupBy { seriesKey(it)!! }
+            .filterValues { it.size > 1 }.mapValues { stackOf(it.value) }
+        val shown = ArrayList<Book>()
+        val byTop = HashMap<String, SeriesStack>()
+        val placed = HashSet<String>()
+        // Each stack takes the place of its first book in the chosen order.
+        for (book in sorted) {
+            val key = seriesKey(book)
+            val stack = if (key != null) stacks[key] else null
+            if (key == null || stack == null) shown += book
+            else if (placed.add(key)) {
+                shown += stack.next
+                byTop[stack.next.id] = stack
+            }
+        }
+        shown to byTop
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList<Book>() to emptyMap())
+
+    /** The grid: filtered by shelf and search, in the chosen order, with series stacked. */
+    val books: StateFlow<List<Book>> = grid.map { it.first }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /** The stacks in [books], by the id of the book on top. */
+    val stacks: StateFlow<Map<String, SeriesStack>> = grid.map { it.second }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
+
+    private fun sortAndFilter(list: List<Book>, f: Filters): List<Book> {
+        val needle = f.needle
+        val s = f.shelf
+        val c = f.collection
+        val order = f.order
+        return list
             .filter { c == null || c in it.collections }
             .filter {
                 when (s) {
@@ -167,7 +244,7 @@ class LibraryViewModel(private val app: FolioApp) : ViewModel() {
                     SortOrder.Rating -> compareByDescending<Book> { it.rating }.thenByDescending { it.lastOpenedAt }
                 },
             )
-    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+    }
 
     private val _importing = MutableStateFlow(false)
     val importing: StateFlow<Boolean> = _importing.asStateFlow()

@@ -58,11 +58,11 @@ class FolioApp : Application() {
         autoBackup.schedule()
         watchForWidgetAndGoal()
         watchYearGoal()
-        // Series named inside EPUBs added before Folio read them, once.
+        // Series named inside EPUBs (or in their titles) added before Folio read them, once.
         val prefs = getSharedPreferences("app_state", MODE_PRIVATE)
-        if (!prefs.getBoolean("seriesFilled", false)) appScope.launch {
+        if (!prefs.getBoolean("seriesFilled2", false)) appScope.launch {
             runCatching { library.fillSeriesFromBooks() }
-            prefs.edit().putBoolean("seriesFilled", true).apply()
+            prefs.edit().putBoolean("seriesFilled2", true).apply()
         }
         // PDFs added or restored but not yet ready, or made by an older conversion, once things settle.
         appScope.launch {
