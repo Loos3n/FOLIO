@@ -36,7 +36,8 @@ data class ReaderSettings(
     /** null = follow the system light/dark setting. */
     val theme: ReaderTheme? = null,
     val font: ReaderFont = ReaderFont.Literata,
-    val justify: Boolean = false,
+    /** Even right edges with hyphenation, like a printed page. */
+    val justify: Boolean = true,
     /** Volume up/down turn pages while reading. */
     val volumeKeys: Boolean = false,
     /** Read-aloud speed (1 = normal) and voice name; null voice = the engine's default. */
@@ -46,6 +47,8 @@ data class ReaderSettings(
     val librarySort: String = "Recent",
     /** The library shows books as spines on wooden shelves instead of a grid of covers. */
     val shelfView: Boolean = false,
+    /** Books in the same series stack into one tile in the library. */
+    val groupSeries: Boolean = true,
     /** PDFs open in the page view instead of as text (each can still switch while open). */
     val pdfOpenAsPages: Boolean = false,
     /** Books open by scrolling rather than in pages, unless a book says otherwise. */
@@ -89,12 +92,13 @@ class SettingsRepository(context: Context) {
             .putInt("margin", next.margin)
             .putString("theme", next.theme?.name)
             .putString("font", next.font.name)
-            .putBoolean("justify", next.justify)
+            .putBoolean("justifyText", next.justify)
             .putBoolean("volumeKeysTurnPages", next.volumeKeys)
             .putFloat("speechRate", next.speechRate)
             .putString("voice", next.voice)
             .putString("librarySort", next.librarySort)
             .putBoolean("shelfView", next.shelfView)
+            .putBoolean("groupSeries", next.groupSeries)
             .putBoolean("pdfOpenAsPages", next.pdfOpenAsPages)
             .putBoolean("scrollDefault", next.scrollDefault)
             .putBoolean("ruler", next.ruler)
@@ -147,12 +151,13 @@ class SettingsRepository(context: Context) {
             margin = prefs.getInt("margin", d.margin),
             theme = prefs.getString("theme", null)?.let { n -> ReaderTheme.entries.firstOrNull { it.name == n } },
             font = prefs.getString("font", null)?.let { n -> ReaderFont.entries.firstOrNull { it.name == n } } ?: d.font,
-            justify = prefs.getBoolean("justify", d.justify),
+            justify = prefs.getBoolean("justifyText", d.justify),
             volumeKeys = prefs.getBoolean("volumeKeysTurnPages", d.volumeKeys),
             speechRate = prefs.getFloat("speechRate", d.speechRate),
             voice = prefs.getString("voice", null),
             librarySort = prefs.getString("librarySort", null) ?: d.librarySort,
             shelfView = prefs.getBoolean("shelfView", d.shelfView),
+            groupSeries = prefs.getBoolean("groupSeries", d.groupSeries),
             pdfOpenAsPages = prefs.getBoolean("pdfOpenAsPages", d.pdfOpenAsPages),
             scrollDefault = prefs.getBoolean("scrollDefault", d.scrollDefault),
             ruler = prefs.getBoolean("ruler", d.ruler),

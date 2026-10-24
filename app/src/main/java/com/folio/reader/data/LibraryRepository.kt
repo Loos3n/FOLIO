@@ -346,15 +346,17 @@ class LibraryRepository(private val context: Context) {
         return EpubBook(file).use { epub ->
             _books.value.firstOrNull { it.title == epub.title && it.author == epub.author }?.let { return it }
             val coverName = epub.coverPath?.let { saveCover(epub, it, id) }
+            val title = epub.title.ifBlank { displayName(uri) ?: "Untitled" }
+            val guess = if (epub.series == null) SeriesGuess.fromTitle(title) else null
             Book(
                 id = id,
-                title = epub.title.ifBlank { displayName(uri) ?: "Untitled" },
+                title = title,
                 author = epub.author,
                 fileName = file.name,
                 coverFileName = coverName,
                 addedAt = System.currentTimeMillis(),
-                series = epub.series,
-                seriesIndex = epub.seriesIndex,
+                series = epub.series ?: guess?.first,
+                seriesIndex = if (epub.series != null) epub.seriesIndex else guess?.second,
             )
         }
     }
@@ -375,6 +377,7 @@ class LibraryRepository(private val context: Context) {
             coverName?.let { n -> File(coversDir, n).delete() }
             return it
         }
+        val guess = SeriesGuess.fromTitle(title)
         return Book(
             id = id,
             title = title,
@@ -382,6 +385,8 @@ class LibraryRepository(private val context: Context) {
             fileName = file.name,
             coverFileName = coverName,
             addedAt = System.currentTimeMillis(),
+            series = guess?.first,
+            seriesIndex = guess?.second,
         )
     }
 
@@ -639,12 +644,15 @@ class LibraryRepository(private val context: Context) {
     }
 
     /**
-     * Fills in the series for EPUBs added before Folio read it from the book's own details.
-     * Runs once; the reader's own edits are left alone.
+     * Fills in the series for books added before Folio read it from the book's own details
+     * or its title. Runs once; books already in a series are left alone.
      */
     suspend fun fillSeriesFromBooks() = withContext(Dispatchers.IO) {
-        val found = _books.value.filter { !it.isAudio && !it.isPdf && it.series == null }.mapNotNull { b ->
-            runCatching { EpubBook(bookFile(b)).use { e -> e.series?.let { b.id to (it to e.seriesIndex) } } }.getOrNull()
+        val found = _books.value.filter { it.series == null }.mapNotNull { b ->
+            val named = if (b.isAudio || b.isPdf) null else runCatching {
+                EpubBook(bookFile(b)).use { e -> e.series?.let { it to e.seriesIndex } }
+            }.getOrNull()
+            (named ?: SeriesGuess.fromTitle(b.title))?.let { b.id to it }
         }.toMap()
         if (found.isEmpty()) return@withContext
         mutate { list ->
