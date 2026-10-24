@@ -179,6 +179,14 @@ object ReaderContent {
                 append("-webkit-column-gap:${2 * m}px !important;column-gap:${2 * m}px !important;column-fill:auto !important;")
                 append("line-height:$lh !important;overflow-wrap:break-word;-webkit-hyphens:auto;hyphens:auto;")
                 append("-webkit-tap-highlight-color:transparent;will-change:transform;}")
+                // Turned sideways, a screen holds two pages side by side like an open book: each
+                // column is half a screen less the margins, and the same gap keeps every turn
+                // exactly one screen wide.
+                if (settings.twoPages) {
+                    val half = "calc(var(--folio-w,100vw) / 2 - ${2 * m}px)"
+                    append("@media (orientation:landscape) and (min-width:560px){")
+                    append("body{-webkit-column-width:$half !important;column-width:$half !important;}}")
+                }
             }
             append("body *{color:inherit !important;background-color:transparent !important;border-color:${fg}33 !important;}")
             append("body p,body li,body blockquote,body div,body span,body dd,body dt,body td{line-height:inherit !important;}")
@@ -599,6 +607,33 @@ object ReaderContent {
           // Whether a swipe that moved [d] px towards the turn, last going at [v], should turn the page:
           // a long drag, or any short flick that's still heading that way.
           function turns(d, v) { return d > width() * 0.18 || (d > 12 && v > 0.1); }
+          // Sliding up or down along the left edge changes the brightness instead of
+          // scrolling or turning. Registered first, so it can claim the gesture.
+          var edgeLight = false, edge = null;
+          document.addEventListener('touchstart', function (e) {
+            edge = null;
+            if (!edgeLight || e.touches.length !== 1 || !bridge || !bridge.onEdgeLight) return;
+            var t = e.touches[0];
+            if (t.clientX < Math.min(56, width() * 0.12)) edge = { x: t.clientX, y: t.clientY, last: t.clientY, on: false };
+          }, { passive: true, capture: true });
+          document.addEventListener('touchmove', function (e) {
+            if (!edge || e.touches.length !== 1) return;
+            var t = e.touches[0], dx = t.clientX - edge.x, dy = t.clientY - edge.y;
+            if (!edge.on) {
+              if (Math.abs(dy) < 10) return;
+              if (Math.abs(dx) > Math.abs(dy)) { edge = null; return; }
+              edge.on = true;
+              axis = 'none';
+            }
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            bridge.onEdgeLight((edge.last - t.clientY) / height());
+            edge.last = t.clientY;
+          }, { passive: false, capture: true });
+          document.addEventListener('touchend', function () {
+            if (edge && edge.on && bridge.onEdgeLightEnd) bridge.onEdgeLightEnd();
+            edge = null;
+          }, { capture: true });
           var startY = 0, pulled = false;
           function hasSelection() { return String(window.getSelection() || '').length > 0; }
           // Scrolling mode uses the WebView's own scrolling; these only watch for a pull
@@ -1014,6 +1049,7 @@ object ReaderContent {
 
           var folio = window.folio = {
             setTurn: function (s) { turnStyle = s; },
+            setEdgeLight: function (on) { edgeLight = !!on; },
             // [direct]: the app is already drawing the turn, so just move.
             next: function (direct) {
               if (leaving) return;
@@ -1173,12 +1209,17 @@ class ReaderBridge(
     private val turnStarted: (forward: Boolean, edge: Boolean) -> Boolean = { _, _ -> false },
     private val turnDragged: (fraction: Float) -> Unit = {},
     private val turnEnded: (commit: Boolean) -> Unit = {},
+    /** A slide along the left edge, as a share of the screen's height (up is positive). */
+    private val edgeLight: (delta: Float) -> Unit = {},
+    private val edgeLightEnded: () -> Unit = {},
 ) {
     @JavascriptInterface fun onPage(page: Int, count: Int, offset: Float, section: Int, sectionEnd: Int, charsLeft: Int, charAt: Int) =
         pageChanged(PageInfo(page, count, offset, section, sectionEnd, charsLeft, charAt))
     @JavascriptInterface fun onReady(page: Int, count: Int, offset: Float, section: Int, sectionEnd: Int, charsLeft: Int, charAt: Int) =
         loaded(PageInfo(page, count, offset, section, sectionEnd, charsLeft, charAt))
     @JavascriptInterface fun onTap(zone: Int) = tapped(zone)
+    @JavascriptInterface fun onEdgeLight(delta: Float) = edgeLight(delta)
+    @JavascriptInterface fun onEdgeLightEnd() = edgeLightEnded()
     @JavascriptInterface fun nextChapter(): Boolean = nextRequested()
     @JavascriptInterface fun prevChapter(): Boolean = prevRequested()
     @JavascriptInterface fun onManualTurn() = manualTurn()
