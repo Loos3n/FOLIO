@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -64,7 +65,11 @@ data class ReaderUiState(
 class ReaderViewModel(private val app: FolioApp, private val bookId: String) : ViewModel() {
 
     private val library = app.library
-    val settings: StateFlow<ReaderSettings> = app.settings.settings
+    /** The shared settings, with this book's own look on top when each book keeps its own. */
+    val settings: StateFlow<ReaderSettings> = combine(app.settings.settings, app.settings.looksChanged) { s, _ -> withLook(s) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, withLook(app.settings.settings.value))
+
+    private fun withLook(s: ReaderSettings) = if (s.perBookLook) app.settings.withBookLook(bookId, s) else s
 
     private val _state = MutableStateFlow(ReaderUiState())
     val state: StateFlow<ReaderUiState> = _state.asStateFlow()
@@ -421,7 +426,29 @@ class ReaderViewModel(private val app: FolioApp, private val bookId: String) : V
 
     val language: String? get() = book?.language
 
-    fun updateSettings(transform: (ReaderSettings) -> ReaderSettings) = app.settings.update(transform)
+    /**
+     * Changes the settings. When each book keeps its own look, a change to the look (font,
+     * size, spacing, margins, colours) is saved for this book only; everything else is shared.
+     */
+    fun updateSettings(transform: (ReaderSettings) -> ReaderSettings) {
+        if (!app.settings.settings.value.perBookLook) {
+            app.settings.update(transform)
+            return
+        }
+        val before = settings.value
+        val after = transform(before)
+        if (after.perBookLook && !after.sameLook(before)) app.settings.saveBookLook(bookId, after)
+        // The shared look stays as it was; the rest of the change applies everywhere.
+        app.settings.update { current -> after.withLookOf(current) }
+    }
+
+    /** This book has a look of its own (only matters when each book keeps one). */
+    val hasOwnLook: StateFlow<Boolean> = app.settings.looksChanged
+        .map { app.settings.hasBookLook(bookId) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, app.settings.hasBookLook(bookId))
+
+    /** Goes back to the shared look for this book. */
+    fun resetLook() = app.settings.clearBookLook(bookId)
 
     fun currentOffset() = chapterOffset
 

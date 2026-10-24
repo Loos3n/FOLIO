@@ -742,8 +742,10 @@ object ReaderContent {
             if (found) { found = null; paint('folio-find', []); }
             var hit = markAt(e.clientX, e.clientY);
             if (hit && bridge && bridge.onHighlightTap) { bridge.onHighlightTap(hit); return; }
-            var x = e.clientX / width();
-            if (bridge) bridge.onTap(x < 0.3 ? -1 : (x > 0.7 ? 1 : 0));
+            // Which ninth of the screen: 0..8, row by row from the top left.
+            var col = Math.min(2, Math.floor(e.clientX / width() * 3));
+            var row = Math.min(2, Math.floor(e.clientY / (window.innerHeight || 1) * 3));
+            if (bridge) bridge.onTap(Math.max(0, row) * 3 + Math.max(0, col));
           });
 
           // ---- Text on the page, for bookmarks and read-aloud.
@@ -1153,6 +1155,7 @@ class ReaderBridge(
      */
     private val pageChanged: (PageInfo) -> Unit,
     private val loaded: (PageInfo) -> Unit,
+    /** A tap on the page, by which ninth of the screen it landed in (0..8, row by row). */
     private val tapped: (zone: Int) -> Unit,
     /** Return whether there is a chapter to move to. */
     private val nextRequested: () -> Boolean,

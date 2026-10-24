@@ -67,6 +67,13 @@ data class ReaderSettings(
     val warmth: Float = 0f,
     /** Tapping near the left or right edge turns the page (otherwise only swipes do). */
     val tapToTurn: Boolean = false,
+    /**
+     * What a tap does in each ninth of the page when [tapToTurn] is on, row by row from the
+     * top left: B goes back a page, F forward, M shows the menu.
+     */
+    val tapZones: String = DEFAULT_TAP_ZONES,
+    /** Each book keeps its own font, size, spacing, margins and colours instead of sharing one look. */
+    val perBookLook: Boolean = false,
     /** A font the reader added (its file name in the fonts folder), used instead of [font]; null = none. */
     val customFont: String? = null,
     /** Books to finish this year; 0 = no goal. */
@@ -75,6 +82,27 @@ data class ReaderSettings(
 ) {
     fun resolvedTheme(systemDark: Boolean): ReaderTheme =
         theme ?: if (systemDark) ReaderTheme.Dark else ReaderTheme.Light
+
+    /** These settings with the look (font, size, spacing, margins, colours) of [other]. */
+    fun withLookOf(other: ReaderSettings) = copy(
+        textZoom = other.textZoom,
+        lineHeight = other.lineHeight,
+        margin = other.margin,
+        theme = other.theme,
+        font = other.font,
+        customFont = other.customFont,
+        justify = other.justify,
+    )
+
+    fun sameLook(other: ReaderSettings) = withLookOf(other) == this
+
+    /** What a tap in [zone] (0..8, row by row from the top left) does: 'B', 'F' or 'M'. */
+    fun tapAction(zone: Int): Char = tapZones.getOrNull(zone)?.takeIf { it in "BFM" } ?: DEFAULT_TAP_ZONES[zone.coerceIn(0, 8)]
+
+    companion object {
+        /** Left third back, right third forward, the middle shows the menu. */
+        const val DEFAULT_TAP_ZONES = "BMFBMFBMF"
+    }
 }
 
 class SettingsRepository(context: Context) {
@@ -111,8 +139,51 @@ class SettingsRepository(context: Context) {
             .putString("customFont", next.customFont)
             .putInt("yearlyBookGoal", next.yearlyBookGoal)
             .putString("pageTurn", next.pageTurn.name)
+            .putString("tapZones", next.tapZones)
+            .putBoolean("perBookLook", next.perBookLook)
             .apply()
     }
+
+    private val _looksChanged = MutableStateFlow(0)
+    /** Bumped whenever a book's own look is saved or cleared. */
+    val looksChanged: StateFlow<Int> = _looksChanged.asStateFlow()
+
+    /** [base] with the book's own look on top, if it has one. */
+    fun withBookLook(id: String, base: ReaderSettings): ReaderSettings {
+        val o = prefs.getString(lookKey(id), null)?.let { runCatching { JSONObject(it) }.getOrNull() } ?: return base
+        return base.copy(
+            textZoom = o.optInt("textZoom", base.textZoom),
+            lineHeight = o.optDouble("lineHeight", base.lineHeight.toDouble()).toFloat(),
+            margin = o.optInt("margin", base.margin),
+            theme = if (o.has("theme")) ReaderTheme.entries.firstOrNull { it.name == o.optString("theme") } else base.theme,
+            font = ReaderFont.entries.firstOrNull { it.name == o.optString("font") } ?: base.font,
+            customFont = if (o.has("customFont")) o.optString("customFont").ifEmpty { null } else base.customFont,
+            justify = o.optBoolean("justify", base.justify),
+        )
+    }
+
+    fun hasBookLook(id: String) = prefs.contains(lookKey(id))
+
+    /** Saves [s]'s look as the book's own. Kept with the other settings, so backups carry it. */
+    fun saveBookLook(id: String, s: ReaderSettings) {
+        val o = JSONObject()
+            .put("textZoom", s.textZoom)
+            .put("lineHeight", s.lineHeight.toDouble())
+            .put("margin", s.margin)
+            .put("theme", s.theme?.name ?: "")
+            .put("font", s.font.name)
+            .put("customFont", s.customFont ?: "")
+            .put("justify", s.justify)
+        prefs.edit().putString(lookKey(id), o.toString()).apply()
+        _looksChanged.value++
+    }
+
+    fun clearBookLook(id: String) {
+        prefs.edit().remove(lookKey(id)).apply()
+        _looksChanged.value++
+    }
+
+    private fun lookKey(id: String) = "look:$id"
 
     /** Every setting, for a backup. */
     fun toJson(): JSONObject {
@@ -141,6 +212,7 @@ class SettingsRepository(context: Context) {
         }
         edit.commit()
         _settings.value = read()
+        _looksChanged.value++
     }
 
     private fun read(): ReaderSettings {
@@ -170,6 +242,8 @@ class SettingsRepository(context: Context) {
             customFont = prefs.getString("customFont", null),
             yearlyBookGoal = prefs.getInt("yearlyBookGoal", d.yearlyBookGoal),
             pageTurn = prefs.getString("pageTurn", null)?.let { n -> PageTurn.entries.firstOrNull { it.name == n } } ?: d.pageTurn,
+            tapZones = prefs.getString("tapZones", null)?.takeIf { it.length == 9 } ?: d.tapZones,
+            perBookLook = prefs.getBoolean("perBookLook", d.perBookLook),
         )
     }
 }
