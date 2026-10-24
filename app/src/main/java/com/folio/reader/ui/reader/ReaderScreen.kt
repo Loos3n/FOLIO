@@ -181,6 +181,7 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
     )
     val state by vm.state.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle()
+    val hasOwnLook by vm.hasOwnLook.collectAsStateWithLifecycle()
     val request by vm.request.collectAsStateWithLifecycle()
     val scrollMode by vm.scrollMode.collectAsStateWithLifecycle()
 
@@ -459,10 +460,14 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
     val onTap: (Int) -> Unit = { zone ->
         when {
             controlsVisible -> controlsVisible = false
-            // Pages turn by swiping; tapping the edges too only when chosen in Display.
-            zone < 0 && settings.tapToTurn -> turn(false)
-            zone > 0 && settings.tapToTurn -> turn(true)
-            else -> controlsVisible = true
+            // Pages turn by swiping; by tapping too only when chosen in Display, where
+            // the reader also sets what each part of the page does.
+            !settings.tapToTurn -> controlsVisible = true
+            else -> when (settings.tapAction(zone)) {
+                'B' -> turn(false)
+                'F' -> turn(true)
+                else -> controlsVisible = true
+            }
         }
     }
 
@@ -828,6 +833,9 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
                 onScrollMode = vm::setScrollMode,
                 onChange = vm::updateSettings,
                 onDismiss = { showSettings = false },
+                forBook = true,
+                hasOwnLook = hasOwnLook,
+                onResetLook = vm::resetLook,
             )
         }
     }
@@ -1553,6 +1561,10 @@ internal fun SettingsSheet(
     onScrollMode: (Boolean) -> Unit,
     onChange: ((ReaderSettings) -> ReaderSettings) -> Unit,
     onDismiss: () -> Unit,
+    /** Opened from inside a book (rather than the library), so a book's own look applies. */
+    forBook: Boolean = false,
+    hasOwnLook: Boolean = false,
+    onResetLook: () -> Unit = {},
 ) {
     val assets = LocalContext.current.assets
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
@@ -1623,6 +1635,20 @@ internal fun SettingsSheet(
                             shape = SegmentedButtonDefaults.itemShape(i, PageTurn.entries.size),
                         ) { Text(t.label) }
                     }
+                }
+            }
+
+            SectionLabel("Look")
+            SwitchRow("Each book keeps its own look", settings.perBookLook) { on -> onChange { it.copy(perBookLook = on) } }
+            if (settings.perBookLook) {
+                Text(
+                    if (forBook) "The theme, font, size, spacing and margins you pick here are for this book only."
+                    else "These are used for books you haven't given a look of their own.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (forBook && hasOwnLook) {
+                    TextButton(onClick = onResetLook, contentPadding = PaddingValues(0.dp)) { Text("Use the shared look for this book") }
                 }
             }
 
@@ -1702,7 +1728,8 @@ internal fun SettingsSheet(
 
             Spacer(Modifier.height(2.dp))
             SwitchRow("Justify and hyphenate", settings.justify) { on -> onChange { it.copy(justify = on) } }
-            SwitchRow("Turn pages by tapping the edges", settings.tapToTurn) { on -> onChange { it.copy(tapToTurn = on) } }
+            SwitchRow("Turn pages by tapping", settings.tapToTurn) { on -> onChange { it.copy(tapToTurn = on) } }
+            if (settings.tapToTurn) TapZones(settings.tapZones) { zones -> onChange { it.copy(tapZones = zones) } }
             SwitchRow("Turn pages with volume buttons", settings.volumeKeys) { on -> onChange { it.copy(volumeKeys = on) } }
         }
     }
@@ -1769,6 +1796,63 @@ private fun SectionLabel(text: String) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(top = 6.dp),
     )
+}
+
+/**
+ * A small page split into nine parts; tapping one changes what a tap there does while
+ * reading: back, menu or forward. At least one part always opens the menu.
+ */
+@Composable
+private fun TapZones(zones: String, onChange: (String) -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+        Text(
+            "Tap a part of the page to change what it does. One part always opens the menu.",
+            style = MaterialTheme.typography.bodySmall,
+            color = scheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(8.dp))
+        Column(
+            Modifier
+                .width(168.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .border(1.dp, scheme.outlineVariant, RoundedCornerShape(14.dp)),
+        ) {
+            for (row in 0..2) {
+                Row {
+                    for (col in 0..2) {
+                        val zone = row * 3 + col
+                        val action = zones.getOrNull(zone) ?: ReaderSettings.DEFAULT_TAP_ZONES[zone]
+                        val (label, tint) = when (action) {
+                            'B' -> "Back" to scheme.secondaryContainer
+                            'F' -> "Next" to scheme.primaryContainer
+                            else -> "Menu" to scheme.surfaceContainerHigh
+                        }
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(76.dp)
+                                .background(tint)
+                                .border(0.5.dp, scheme.outlineVariant)
+                                .clickable {
+                                    val order = "BMF"
+                                    val next = order[(order.indexOf(action) + 1) % 3]
+                                    val changed = zones.padEnd(9, 'M').replaceRange(zone, zone + 1, next.toString())
+                                    // The last part that opens the menu stays that way.
+                                    if ('M' in changed) onChange(changed)
+                                },
+                        ) {
+                            Text(label, style = MaterialTheme.typography.labelMedium, color = scheme.onSurface)
+                        }
+                    }
+                }
+            }
+        }
+        if (zones != ReaderSettings.DEFAULT_TAP_ZONES) {
+            TextButton(onClick = { onChange(ReaderSettings.DEFAULT_TAP_ZONES) }) { Text("Reset") }
+        }
+    }
 }
 
 @Composable
