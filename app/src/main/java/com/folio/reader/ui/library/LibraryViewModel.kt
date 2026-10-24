@@ -179,16 +179,20 @@ class LibraryViewModel(private val app: FolioApp) : ViewModel() {
     private data class Filters(val needle: String, val shelf: Shelf, val order: SortOrder, val collection: String?, val series: String?)
 
     /** Grid books with each series folded into its next book, and the stacks those stand for. */
-    private val grid: StateFlow<Pair<List<Book>, Map<String, SeriesStack>>> = combine(library.books, filters, app.settings.settings) { list, f, settings ->
+    private val grid: StateFlow<Pair<List<Book>, Map<String, SeriesStack>>> =
+        combine(library.books, filters, app.settings.settings) { list, f, settings -> arrange(list, f, settings) }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, Pair(emptyList(), emptyMap()))
+
+    private fun arrange(list: List<Book>, f: Filters, settings: ReaderSettings): Pair<List<Book>, Map<String, SeriesStack>> {
         val sorted = sortAndFilter(list, f)
         if (f.series != null) {
             val key = f.series.trim().lowercase()
             val members = list.filter { seriesKey(it) == key }
-            if (members.isNotEmpty()) return@combine stackOf(members).books to emptyMap()
+            if (members.isNotEmpty()) return Pair(stackOf(members).books, emptyMap())
         }
         // Stacks only in the plain covers grid: a search, or the bookshelf, shows every book.
-        if (!settings.groupSeries || settings.shelfView || f.needle.isNotEmpty()) return@combine sorted to emptyMap()
-        val stacks = sorted.filter { it.series != null }.groupBy { seriesKey(it)!! }
+        if (!settings.groupSeries || settings.shelfView || f.needle.isNotEmpty()) return Pair(sorted, emptyMap())
+        val stacks: Map<String, SeriesStack> = sorted.filter { it.series != null }.groupBy { seriesKey(it)!! }
             .filterValues { it.size > 1 }.mapValues { stackOf(it.value) }
         val shown = ArrayList<Book>()
         val byTop = HashMap<String, SeriesStack>()
@@ -203,8 +207,8 @@ class LibraryViewModel(private val app: FolioApp) : ViewModel() {
                 byTop[stack.next.id] = stack
             }
         }
-        shown to byTop
-    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList<Book>() to emptyMap())
+        return Pair(shown, byTop)
+    }
 
     /** The grid: filtered by shelf and search, in the chosen order, with series stacked. */
     val books: StateFlow<List<Book>> = grid.map { it.first }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
