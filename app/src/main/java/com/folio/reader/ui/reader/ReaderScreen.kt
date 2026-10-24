@@ -172,11 +172,11 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 @Composable
-fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Unit)? = null) {
+fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Unit)? = null, markId: String? = null) {
     val vm: ReaderViewModel = viewModel(
         factory = viewModelFactory {
             initializer {
-                ReaderViewModel(this[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY] as FolioApp, bookId)
+                ReaderViewModel(this[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY] as FolioApp, bookId, markId)
             }
         },
     )

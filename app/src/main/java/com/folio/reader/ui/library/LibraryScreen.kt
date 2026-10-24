@@ -128,6 +128,7 @@ fun LibraryScreen(
     vm: LibraryViewModel,
     onOpen: (String) -> Unit,
     onFindFree: () -> Unit,
+    onNotes: () -> Unit = {},
 ) {
     val allBooks by vm.allBooks.collectAsStateWithLifecycle()
     val books by vm.books.collectAsStateWithLifecycle()
@@ -256,6 +257,7 @@ fun LibraryScreen(
                             if (searching) vm.query.value = ""
                             searching = !searching
                         },
+                        onNotes = onNotes,
                         onStats = { showStats = true },
                         onDisplay = { showDisplay = true },
                         onWords = { showWords = true },
@@ -481,6 +483,7 @@ private fun Header(
     importing: Boolean,
     searching: Boolean,
     onSearch: () -> Unit,
+    onNotes: () -> Unit,
     onStats: () -> Unit,
     onDisplay: () -> Unit,
     onWords: () -> Unit,
@@ -506,6 +509,9 @@ private fun Header(
                     contentDescription = if (searching) "Close search" else "Search",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+            IconButton(onClick = onNotes) {
+                Icon(LibraryIcons.Notes, contentDescription = "All highlights and notes", tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             IconButton(onClick = onStats) {
                 Icon(LibraryIcons.Stats, contentDescription = "Reading stats", tint = MaterialTheme.colorScheme.onSurfaceVariant)
