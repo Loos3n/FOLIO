@@ -156,6 +156,7 @@ import com.folio.reader.PageKeys
 import com.folio.reader.data.Bookmark
 import com.folio.reader.data.Highlight
 import com.folio.reader.data.HighlightExport
+import com.folio.reader.ui.common.QuoteCardSheet
 import com.folio.reader.data.ReaderFont
 import com.folio.reader.data.ReaderSettings
 import com.folio.reader.data.ReaderTheme
@@ -200,6 +201,7 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
     var showSearch by remember { mutableStateOf(false) }
     /** The highlight whose colour and note are being edited, and whether to start typing the note. */
     var editing by remember { mutableStateOf<Highlight?>(null) }
+    var quoting by remember { mutableStateOf<Highlight?>(null) }
     var editingNote by remember { mutableStateOf(false) }
     var defineTerm by remember { mutableStateOf<String?>(null) }
 
@@ -815,6 +817,18 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
                     editing = null
                 },
                 onDismiss = { editing = null },
+                onQuoteCard = {
+                    quoting = it
+                    editing = null
+                },
+            )
+        }
+        quoting?.let { mark ->
+            QuoteCardSheet(
+                mark = mark,
+                title = state.title,
+                author = vm.book()?.author,
+                onDismiss = { quoting = null },
             )
         }
         footnote?.let { (text, href) ->

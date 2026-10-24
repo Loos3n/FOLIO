@@ -178,6 +178,7 @@ internal fun HighlightSheet(
     onSave: (Highlight) -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit,
+    onQuoteCard: ((Highlight) -> Unit)? = null,
 ) {
     var note by remember(mark.id) { mutableStateOf(mark.note) }
     var color by remember(mark.id) { mutableStateOf(mark.color) }
@@ -250,6 +251,12 @@ internal fun HighlightSheet(
                     Text("Delete highlight", color = MaterialTheme.colorScheme.error)
                 }
                 Spacer(Modifier.weight(1f))
+                if (onQuoteCard != null) {
+                    TextButton(onClick = {
+                        if (current.note != mark.note || current.color != mark.color) onSave(current)
+                        onQuoteCard(current)
+                    }) { Text("Quote card") }
+                }
                 Button(onClick = ::close) { Text("Done") }
             }
         }

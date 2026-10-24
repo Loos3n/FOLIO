@@ -723,8 +723,17 @@ object ReaderContent {
           function typeOf(el) {
             return el && el.getAttribute ? ((el.getAttribute('epub:type') || '') + ' ' + (el.getAttribute('role') || '')).toLowerCase() : '';
           }
+          // Class names, ids and link targets that books use for note markers: fn3, ftn3, note_3, endnote-3.
+          var NOTE_NAME = /(^|[^a-z])(fn|ftn|fnref|ftnref|noteref|footnote|endnote|note|nt)[-_]?\d*([^a-z]|$)/i;
+          function namedLikeNote(a) {
+            var hash = (a.getAttribute('href') || '').split('#')[1] || '';
+            return NOTE_NAME.test(a.className || '') || NOTE_NAME.test(a.id || '') || NOTE_NAME.test(hash) ||
+              NOTE_NAME.test((a.parentNode && a.parentNode.className) || '');
+          }
           function looksLikeNoteRef(a, target) {
             if (/noteref/.test(typeOf(a))) return true;
+            if (target && /footnote|endnote|note/i.test(target.className || '')) return true;
+            if (a.textContent.replace(/\s+/g, '').length <= 12 && namedLikeNote(a)) return true;
             if (/footnote|endnote|rearnote|doc-note|\bnote\b/.test(typeOf(target))) return true;
             var txt = a.textContent.replace(/\s+/g, '');
             if (!txt || txt.length > 6) return false;
@@ -736,7 +745,10 @@ object ReaderContent {
             var n = el;
             while (n && n.parentNode && n.nodeName && INLINE.test(n.nodeName.toLowerCase()) &&
                    n.parentNode.nodeName.toLowerCase() !== 'body') n = n.parentNode;
-            var text = (n.textContent || '').replace(/\s+/g, ' ').trim();
+            // A heading or a whole section is a place to go, not a note.
+            if (/^(h[1-6]|section|body|html)$/i.test(n.nodeName) && !/note/i.test(typeOf(n) + ' ' + (n.className || ''))) return '';
+            var text = (n.textContent || '').replace(/\s+/g, ' ').trim()
+              .replace(/\s*[\u21a9\u21aa\u2191\u2934\u25b2^]\ufe0e?\s*$/, '');
             return text.length > 3000 ? text.slice(0, 3000) + '\u2026' : text;
           }
           function findIn(doc, id) {

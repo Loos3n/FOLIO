@@ -1,7 +1,8 @@
 package com.folio.reader.ui.library
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -50,6 +51,7 @@ import com.folio.reader.data.Book
 import com.folio.reader.data.Highlight
 import com.folio.reader.data.HighlightExport
 import com.folio.reader.ui.common.MessageView
+import com.folio.reader.ui.common.QuoteCardSheet
 import java.text.DateFormat
 import java.util.Date
 
@@ -59,6 +61,10 @@ fun NotesScreen(vm: LibraryViewModel, onBack: () -> Unit, onOpen: (bookId: Strin
     val books by vm.allBooks.collectAsStateWithLifecycle()
     var query by rememberSaveable { mutableStateOf("") }
     val context = LocalContext.current
+    var quoting by remember { mutableStateOf<Pair<Book, Highlight>?>(null) }
+    quoting?.let { (book, mark) ->
+        QuoteCardSheet(mark = mark, title = book.title, author = book.author, onDismiss = { quoting = null })
+    }
 
     val groups = remember(books, query) {
         val q = query.trim()
@@ -105,6 +111,12 @@ fun NotesScreen(vm: LibraryViewModel, onBack: () -> Unit, onOpen: (bookId: Strin
         Box(Modifier.padding(horizontal = 20.dp, vertical = 12.dp)) {
             SearchField(query = query, onQuery = { query = it }, placeholder = "Search highlights and notes")
         }
+        Text(
+            "Tap a highlight to open it in the book. Hold one to make a quote card.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 4.dp),
+        )
         if (groups.isEmpty()) {
             MessageView(
                 title = "Nothing matches",
@@ -131,7 +143,7 @@ fun NotesScreen(vm: LibraryViewModel, onBack: () -> Unit, onOpen: (bookId: Strin
                     )
                 }
                 items(marks, key = { "mark:${book.id}:${it.id}" }) { mark ->
-                    NoteCard(mark, onClick = { onOpen(book.id, mark.id) })
+                    NoteCard(mark, onClick = { onOpen(book.id, mark.id) }, onLongClick = { quoting = book to mark })
                 }
             }
         }
@@ -159,12 +171,13 @@ private fun BookNotesHeader(book: Book, count: Int, cover: java.io.File?, onShar
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun NoteCard(mark: Highlight, onClick: () -> Unit) {
+private fun NoteCard(mark: Highlight, onClick: () -> Unit, onLongClick: () -> Unit) {
     Surface(
         shape = RoundedCornerShape(14.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
-        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable(onClick = onClick),
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).combinedClickable(onClick = onClick, onLongClick = onLongClick),
     ) {
         Row(Modifier.height(IntrinsicSize.Min)) {
             Box(Modifier.width(5.dp).fillMaxHeight().background(Color(mark.color.argb)))
