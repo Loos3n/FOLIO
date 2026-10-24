@@ -72,6 +72,8 @@ data class ReaderSettings(
      * top left: B goes back a page, F forward, M shows the menu.
      */
     val tapZones: String = DEFAULT_TAP_ZONES,
+    /** The menu opens on a double tap rather than a single one, so a stray tap doesn't bring it up. */
+    val doubleTapMenu: Boolean = true,
     /** Each book keeps its own font, size, spacing, margins and colours instead of sharing one look. */
     val perBookLook: Boolean = false,
     /** A font the reader added (its file name in the fonts folder), used instead of [font]; null = none. */
@@ -141,6 +143,7 @@ class SettingsRepository(context: Context) {
             .putString("pageTurn", next.pageTurn.name)
             .putString("tapZones", next.tapZones)
             .putBoolean("perBookLook", next.perBookLook)
+            .putBoolean("doubleTapMenu", next.doubleTapMenu)
             .apply()
     }
 
@@ -244,6 +247,7 @@ class SettingsRepository(context: Context) {
             pageTurn = prefs.getString("pageTurn", null)?.let { n -> PageTurn.entries.firstOrNull { it.name == n } } ?: d.pageTurn,
             tapZones = prefs.getString("tapZones", null)?.takeIf { it.length == 9 } ?: d.tapZones,
             perBookLook = prefs.getBoolean("perBookLook", d.perBookLook),
+            doubleTapMenu = prefs.getBoolean("doubleTapMenu", d.doubleTapMenu),
         )
     }
 }

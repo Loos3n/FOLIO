@@ -23,6 +23,7 @@ import com.folio.reader.ui.common.LoadingView
 import android.annotation.SuppressLint
 import com.folio.reader.audio.SpeechPlayer
 import android.os.PowerManager
+import android.os.SystemClock
 import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -457,16 +458,27 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
     }
 
     var bottomPanelHeight by remember { mutableIntStateOf(0) }
+    // When the menu takes a double tap, the time of the last tap that could have been the first.
+    var menuTapAt by remember { mutableLongStateOf(0L) }
+    val showMenu = {
+        val now = SystemClock.uptimeMillis()
+        if (!settings.doubleTapMenu || now - menuTapAt < DOUBLE_TAP_MS) {
+            controlsVisible = true
+            menuTapAt = 0L
+        } else {
+            menuTapAt = now
+        }
+    }
     val onTap: (Int) -> Unit = { zone ->
         when {
             controlsVisible -> controlsVisible = false
             // Pages turn by swiping; by tapping too only when chosen in Display, where
             // the reader also sets what each part of the page does.
-            !settings.tapToTurn -> controlsVisible = true
+            !settings.tapToTurn -> showMenu()
             else -> when (settings.tapAction(zone)) {
-                'B' -> turn(false)
-                'F' -> turn(true)
-                else -> controlsVisible = true
+                'B' -> { menuTapAt = 0L; turn(false) }
+                'F' -> { menuTapAt = 0L; turn(true) }
+                else -> showMenu()
             }
         }
     }
@@ -840,6 +852,9 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
         }
     }
 }
+
+/** Two taps closer together than this make a double tap. */
+private const val DOUBLE_TAP_MS = 350L
 
 private const val AUTO_MIN = 8f
 private const val AUTO_MAX = 240f
@@ -1730,6 +1745,7 @@ internal fun SettingsSheet(
             SwitchRow("Justify and hyphenate", settings.justify) { on -> onChange { it.copy(justify = on) } }
             SwitchRow("Turn pages by tapping", settings.tapToTurn) { on -> onChange { it.copy(tapToTurn = on) } }
             if (settings.tapToTurn) TapZones(settings.tapZones) { zones -> onChange { it.copy(tapZones = zones) } }
+            SwitchRow("Double-tap to show the menu", settings.doubleTapMenu) { on -> onChange { it.copy(doubleTapMenu = on) } }
             SwitchRow("Turn pages with volume buttons", settings.volumeKeys) { on -> onChange { it.copy(volumeKeys = on) } }
         }
     }
