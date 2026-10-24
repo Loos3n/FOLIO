@@ -241,10 +241,13 @@ object ReaderContent {
             append(".folio-find div{box-shadow:inset 0 0 0 999px ${link}40;}")
             // .folio-p marks the book's ordinary body paragraphs (not centred or right-aligned ones),
             // so the justify setting applies both ways without flattening title pages.
-            // Justified lines hyphenate long words (not short ones, and not into tiny fragments)
-            // so the spacing between words stays even.
-            if (settings.justify) append(".folio-p{text-align:justify !important;text-align-last:start;hyphenate-limit-chars:6 3 3;}")
-            else append(".folio-p{text-align:start !important;}")
+            // Justified lines hyphenate long words so the spacing between words stays even. Books
+            // often switch hyphenation off for their paragraphs, which leaves justified lines full of
+            // gaps, so it's forced back on; "pretty" wrapping evens the lines out too.
+            if (settings.justify) {
+                append(".folio-p{text-align:justify !important;text-align-last:start;hyphenate-limit-chars:5 2 2;text-wrap:pretty;}")
+                append(".folio-p,.folio-p *{-webkit-hyphens:auto !important;hyphens:auto !important;}")
+            } else append(".folio-p{text-align:start !important;}")
             val own = settings.customFont
             if (own != null) {
                 append("@font-face{font-family:'Folio Own';src:url('$ORIGIN${INTERNAL}myfonts/${Uri.encode(own)}');}")
