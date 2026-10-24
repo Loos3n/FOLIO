@@ -72,6 +72,10 @@ data class ReaderSettings(
      * top left: B goes back a page, F forward, M shows the menu.
      */
     val tapZones: String = DEFAULT_TAP_ZONES,
+    /** Sliding up or down along the left edge of the page changes the brightness. */
+    val edgeBrightness: Boolean = true,
+    /** With the phone sideways, two pages show side by side. */
+    val twoPages: Boolean = true,
     /** The menu opens on a double tap rather than a single one, so a stray tap doesn't bring it up. */
     val doubleTapMenu: Boolean = true,
     /** Each book keeps its own font, size, spacing, margins and colours instead of sharing one look. */
@@ -144,6 +148,8 @@ class SettingsRepository(context: Context) {
             .putString("tapZones", next.tapZones)
             .putBoolean("perBookLook", next.perBookLook)
             .putBoolean("doubleTapMenu", next.doubleTapMenu)
+            .putBoolean("edgeBrightness", next.edgeBrightness)
+            .putBoolean("twoPages", next.twoPages)
             .apply()
     }
 
@@ -248,6 +254,8 @@ class SettingsRepository(context: Context) {
             tapZones = prefs.getString("tapZones", null)?.takeIf { it.length == 9 } ?: d.tapZones,
             perBookLook = prefs.getBoolean("perBookLook", d.perBookLook),
             doubleTapMenu = prefs.getBoolean("doubleTapMenu", d.doubleTapMenu),
+            edgeBrightness = prefs.getBoolean("edgeBrightness", d.edgeBrightness),
+            twoPages = prefs.getBoolean("twoPages", d.twoPages),
         )
     }
 }

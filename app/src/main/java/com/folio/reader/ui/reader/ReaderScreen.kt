@@ -458,6 +458,9 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
     }
 
     var bottomPanelHeight by remember { mutableIntStateOf(0) }
+    // The brightness being set by sliding along the left edge, shown while it changes.
+    var lightLevel by remember { mutableStateOf<Float?>(null) }
+    var lightHide by remember { mutableStateOf<Job?>(null) }
     // When the menu takes a double tap, the time of the last tap that could have been the first.
     var menuTapAt by remember { mutableLongStateOf(0L) }
     val showMenu = {
@@ -532,12 +535,28 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
                     onFootnote = { text, href -> footnote = text to href },
                     onCreated = { webView = it },
                     onChapterReady = { speechFlags.onChapterReady() },
+                    onEdgeLight = { delta ->
+                        // From Auto, start where the phone's own brightness is.
+                        val start = lightLevel ?: settings.brightness.takeIf { it >= 0f } ?: systemBrightness(context)
+                        val level = (start + delta * 1.2f).coerceIn(0f, 1f)
+                        vm.updateSettings { it.copy(brightness = level) }
+                        lightLevel = level
+                        lightHide?.cancel()
+                    },
+                    onEdgeLightEnd = {
+                        lightHide?.cancel()
+                        lightHide = scope.launch {
+                            delay(900)
+                            lightLevel = null
+                        }
+                    },
                     modifier = Modifier
                         .fillMaxSize()
                         .windowInsetsPadding(WindowInsets.systemBarsIgnoringVisibility.union(WindowInsets.displayCutout))
                         .padding(top = 30.dp, bottom = 30.dp),
                 )
             }
+            lightLevel?.let { level -> LightBadge(level, Modifier.align(Alignment.CenterStart).padding(start = 20.dp)) }
 
             // Reading ruler (scrolling mode): a clear band to read in, with the text above and
             // below it softly dimmed. It takes no touches, so the page scrolls underneath.
@@ -853,6 +872,45 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
     }
 }
 
+/** The phone's own brightness setting as 0..1 (a rough guide: phones map it differently). */
+private fun systemBrightness(context: android.content.Context): Float =
+    runCatching { android.provider.Settings.System.getInt(context.contentResolver, android.provider.Settings.System.SCREEN_BRIGHTNESS) / 255f }
+        .getOrDefault(0.5f).coerceIn(0f, 1f)
+
+/** How bright the screen is being set, while sliding along the left edge. */
+@Composable
+private fun LightBadge(level: Float, modifier: Modifier = Modifier) {
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.inverseSurface.copy(alpha = 0.88f),
+        contentColor = MaterialTheme.colorScheme.inverseOnSurface,
+        modifier = modifier,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(horizontal = 10.dp, vertical = 12.dp)) {
+            Icon(ReaderIcons.Brightness, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.height(8.dp))
+            Box(
+                Modifier
+                    .width(6.dp)
+                    .height(120.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.inverseOnSurface.copy(alpha = 0.25f)),
+                contentAlignment = Alignment.BottomCenter,
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .fillMaxHeight(level.coerceIn(0.02f, 1f))
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.inverseOnSurface),
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Text("${(level * 100).roundToInt()}%", style = MaterialTheme.typography.labelSmall)
+        }
+    }
+}
+
 /** Two taps closer together than this make a double tap. */
 private const val DOUBLE_TAP_MS = 350L
 
@@ -898,8 +956,13 @@ private fun BookWebView(
     onFootnote: (text: String, href: String) -> Unit,
     onCreated: (FolioWebView?) -> Unit,
     onChapterReady: () -> Unit,
+    onEdgeLight: (delta: Float) -> Unit,
+    onEdgeLightEnd: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val currentOnEdgeLight = rememberUpdatedState(onEdgeLight)
+    val currentOnEdgeLightEnd = rememberUpdatedState(onEdgeLightEnd)
+    val currentEdge = rememberUpdatedState(prefs.edgeBrightness)
     val currentOnChapterReady = rememberUpdatedState(onChapterReady)
     val context = LocalContext.current
     val currentOnManualTurn = rememberUpdatedState(onManualTurn)
@@ -944,6 +1007,7 @@ private fun BookWebView(
                     loaded = { info ->
                         view.post {
                             view.evaluateJavascript("window.folio && folio.setTurn && folio.setTurn('${currentTurn.value.js}')", null)
+                            view.evaluateJavascript("window.folio && folio.setEdgeLight && folio.setEdgeLight(${currentEdge.value})", null)
                             vm.onPage(info)
                             currentOnChapterReady.value()
                             turner.chapterReady()
@@ -976,6 +1040,8 @@ private fun BookWebView(
                         val forward = dragForward.get()
                         view.post { turner.end(turnScope, commit, move = { view.step(forward) }, undo = { view.step(!forward) }) }
                     },
+                    edgeLight = { delta -> view.post { currentOnEdgeLight.value(delta) } },
+                    edgeLightEnded = { view.post { currentOnEdgeLightEnd.value() } },
                 ),
                 "FolioBridge",
             )
@@ -1055,6 +1121,10 @@ private fun BookWebView(
 
     LaunchedEffect(prefs.pageTurn) {
         webView.evaluateJavascript("window.folio && folio.setTurn && folio.setTurn('${prefs.pageTurn.js}')", null)
+    }
+
+    LaunchedEffect(prefs.edgeBrightness) {
+        webView.evaluateJavascript("window.folio && folio.setEdgeLight && folio.setEdgeLight(${prefs.edgeBrightness})", null)
     }
 
     Box(modifier) {
@@ -1746,6 +1816,8 @@ internal fun SettingsSheet(
             SwitchRow("Turn pages by tapping", settings.tapToTurn) { on -> onChange { it.copy(tapToTurn = on) } }
             if (settings.tapToTurn) TapZones(settings.tapZones) { zones -> onChange { it.copy(tapZones = zones) } }
             SwitchRow("Double-tap to show the menu", settings.doubleTapMenu) { on -> onChange { it.copy(doubleTapMenu = on) } }
+            SwitchRow("Slide along the left edge for brightness", settings.edgeBrightness) { on -> onChange { it.copy(edgeBrightness = on) } }
+            SwitchRow("Two pages side by side when sideways", settings.twoPages) { on -> onChange { it.copy(twoPages = on) } }
             SwitchRow("Turn pages with volume buttons", settings.volumeKeys) { on -> onChange { it.copy(volumeKeys = on) } }
         }
     }
