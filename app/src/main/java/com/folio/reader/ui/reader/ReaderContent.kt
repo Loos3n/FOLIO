@@ -732,8 +732,9 @@ object ReaderContent {
           }
           function looksLikeNoteRef(a, target) {
             if (/noteref/.test(typeOf(a))) return true;
-            if (target && /footnote|endnote|note/i.test(target.className || '')) return true;
-            if (a.textContent.replace(/\s+/g, '').length <= 12 && namedLikeNote(a)) return true;
+            var short = a.textContent.replace(/\s+/g, '').length <= 12;
+            if (short && target && /footnote|endnote|\bnote\b/i.test(String(target.className || ''))) return true;
+            if (short && namedLikeNote(a)) return true;
             if (/footnote|endnote|rearnote|doc-note|\bnote\b/.test(typeOf(target))) return true;
             var txt = a.textContent.replace(/\s+/g, '');
             if (!txt || txt.length > 6) return false;

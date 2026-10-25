@@ -100,7 +100,12 @@ fun FolioNavHost(incoming: MutableStateFlow<Uri?>, openBook: MutableStateFlow<St
                 NotesScreen(
                     vm = libraryVm,
                     onBack = { nav.popBackStack() },
-                    onOpen = { bookId, markId -> nav.navigate("reader/$bookId?mark=$markId") },
+                    onOpen = { bookId, markId ->
+                        val book = libraryVm.allBooks.value.firstOrNull { it.id == bookId }
+                        // A PDF whose text is being redone can only open as pages for now.
+                        if (book?.isPdf == true && !libraryVm.textReady(book)) open(bookId)
+                        else nav.navigate("reader/$bookId?mark=$markId") { launchSingleTop = true }
+                    },
                 )
             }
             composable("free") {
