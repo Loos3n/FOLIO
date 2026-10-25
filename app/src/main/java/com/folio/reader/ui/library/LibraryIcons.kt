@@ -8,6 +8,7 @@ import androidx.compose.ui.unit.dp
 
 /** Material icons beyond material-icons-core, drawn from their standard 24dp paths. */
 internal object LibraryIcons {
+    val Notes = icon("StickyNote2", "M19,3H4.99C3.89,3 3,3.9 3,5l0.01,14c0,1.1 0.89,2 1.99,2h10l6,-6V5C21,3.9 20.1,3 19,3zM7,8h10v2H7V8zM12,14H7v-2h5V14zM14,19.5V14h5.5L14,19.5z")
     val Stats = icon("BarChart", "M5,9.2h3V19H5V9.2zM10.6,5h2.8v14h-2.8V5zM16.2,13H19v6h-2.8V13z")
     val Collection = icon(
         "Folder",

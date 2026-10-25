@@ -62,7 +62,7 @@ data class ReaderUiState(
     val charsLeft: Int = 0,
 )
 
-class ReaderViewModel(private val app: FolioApp, private val bookId: String) : ViewModel() {
+class ReaderViewModel(private val app: FolioApp, private val bookId: String, private val markId: String? = null) : ViewModel() {
 
     private val library = app.library
     /** The shared settings, with this book's own look on top when each book keeps its own. */
@@ -154,7 +154,9 @@ class ReaderViewModel(private val app: FolioApp, private val bookId: String) : V
                     )
                 }
                 library.markOpened(bookId)
-                show(index, entry.chapterOffset, null)
+                // Opened from the notes list: start at that highlight instead of the saved spot.
+                val mark = markId?.let { id -> entry.highlights.firstOrNull { it.id == id } }
+                if (mark != null) openHighlight(mark) else show(index, entry.chapterOffset, null)
             }.onFailure { e ->
                 _state.update { it.copy(loading = false, error = e.message ?: "Couldn't open this book.") }
             }

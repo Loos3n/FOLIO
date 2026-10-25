@@ -29,11 +29,14 @@ import com.folio.reader.ui.library.FreeBooksScreen
 import com.folio.reader.ui.library.FreeBooksViewModel
 import com.folio.reader.ui.library.LibraryScreen
 import com.folio.reader.ui.library.LibraryViewModel
+import com.folio.reader.ui.library.NotesScreen
 import com.folio.reader.ui.listen.ListenScreen
 import com.folio.reader.ui.reader.PdfReaderScreen
 import com.folio.reader.ui.reader.ReaderScreen
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.filterNotNull
+
+private const val READER_ROUTE = "reader/{bookId}?mark={mark}"
 
 @Composable
 fun FolioNavHost(incoming: MutableStateFlow<Uri?>, openBook: MutableStateFlow<String?>) {
@@ -89,6 +92,20 @@ fun FolioNavHost(incoming: MutableStateFlow<Uri?>, openBook: MutableStateFlow<St
                     vm = libraryVm,
                     onOpen = open,
                     onFindFree = { nav.navigate("free") { launchSingleTop = true } },
+                    onNotes = { nav.navigate("notes") { launchSingleTop = true } },
+                )
+            }
+            composable("notes") {
+                // Highlights always open in the text reader, PDFs included, since that's where they live.
+                NotesScreen(
+                    vm = libraryVm,
+                    onBack = { nav.popBackStack() },
+                    onOpen = { bookId, markId ->
+                        val book = libraryVm.allBooks.value.firstOrNull { it.id == bookId }
+                        // A PDF whose text is being redone can only open as pages for now.
+                        if (book?.isPdf == true && !libraryVm.textReady(book)) open(bookId)
+                        else nav.navigate("reader/$bookId?mark=$markId") { launchSingleTop = true }
+                    },
                 )
             }
             composable("free") {
@@ -100,18 +117,23 @@ fun FolioNavHost(incoming: MutableStateFlow<Uri?>, openBook: MutableStateFlow<St
                 FreeBooksScreen(vm = freeVm, onBack = { nav.popBackStack() }, onOpen = open)
             }
             composable(
-                "reader/{bookId}",
-                arguments = listOf(navArgument("bookId") { type = NavType.StringType }),
+                READER_ROUTE,
+                arguments = listOf(
+                    navArgument("bookId") { type = NavType.StringType },
+                    navArgument("mark") { type = NavType.StringType; nullable = true; defaultValue = null },
+                ),
             ) { entry ->
                 val bookId = entry.arguments?.getString("bookId") ?: return@composable
+                val markId = entry.arguments?.getString("mark")
                 val isPdf = libraryVm.allBooks.value.firstOrNull { it.id == bookId }?.isPdf == true
                 ReaderScreen(
                     bookId = bookId,
+                    markId = markId,
                     onBack = { nav.popBackStack() },
                     onOriginalPages = if (!isPdf) null else {
                         {
                             libraryVm.showPdfPages(bookId)
-                            nav.navigate("pdf/$bookId") { popUpTo("reader/{bookId}") { inclusive = true } }
+                            nav.navigate("pdf/$bookId") { popUpTo(READER_ROUTE) { inclusive = true } }
                         }
                     },
                 )

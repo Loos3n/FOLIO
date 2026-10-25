@@ -43,6 +43,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
@@ -178,6 +179,7 @@ internal fun HighlightSheet(
     onSave: (Highlight) -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit,
+    onQuoteCard: ((Highlight) -> Unit)? = null,
 ) {
     var note by remember(mark.id) { mutableStateOf(mark.note) }
     var color by remember(mark.id) { mutableStateOf(mark.color) }
@@ -245,6 +247,15 @@ internal fun HighlightSheet(
                     .focusRequester(focus),
             )
             LaunchedEffect(Unit) { if (focusNote) focus.requestFocus() }
+            if (onQuoteCard != null) {
+                OutlinedButton(
+                    onClick = {
+                        if (current.note != mark.note || current.color != mark.color) onSave(current)
+                        onQuoteCard(current)
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Make a quote card") }
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = onDelete) {
                     Text("Delete highlight", color = MaterialTheme.colorScheme.error)
