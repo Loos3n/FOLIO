@@ -866,6 +866,7 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
                     vm.updateSettings { it.copy(ttsEngine = engine, voice = voice) }
                     if (hear) readAloud.previewSoon(voice)
                 },
+                onHear = { engine, voice -> readAloud.hear(engine, voice) },
                 onGetGoogle = {
                     voiceSetupOpened = true
                     VoiceSetup.getGoogle(context)
@@ -884,7 +885,10 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
                     sleepEndsAt = minutes?.let { System.currentTimeMillis() + it * 60_000L }
                     now = System.currentTimeMillis()
                 },
-                onDismiss = { showReadAloudSheet = false },
+                onDismiss = {
+                    showReadAloudSheet = false
+                    readAloud.dropSamples()
+                },
             )
         }
         defineTerm?.let { term ->

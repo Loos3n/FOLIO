@@ -12,6 +12,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -47,6 +48,8 @@ internal fun AiVoicePicker(
     aiError: String?,
     /** Chooses a voice; [hear] plays a sample of it once it's ready. */
     onPick: (engine: String?, voice: String?, hear: Boolean) -> Unit,
+    /** Plays a sample of a voice without choosing it. */
+    onHear: (engine: String?, voice: String?) -> Unit,
 ) {
     val context = LocalContext.current
     val installedIds by remember { AiVoices.installed(context) }.collectAsStateWithLifecycle()
@@ -95,7 +98,9 @@ internal fun AiVoicePicker(
             val chosen = if (engine == model.engineKey) voice?.toIntOrNull() ?: 0 else -1
             model.speakers.forEachIndexed { i, speaker ->
                 val (name, what) = splitSpeaker(speaker)
-                PickRow(name, what, selected = i == chosen) { onPick(model.engineKey, i.toString(), true) }
+                PickRow(name, what, selected = i == chosen, onPlay = { onHear(model.engineKey, i.toString()) }) {
+                    onPick(model.engineKey, i.toString(), false)
+                }
             }
         }
     }
@@ -158,6 +163,8 @@ private fun DownloadRow(
                     val f = progress.fraction
                     Text(
                         when {
+                            progress.engine && progress.unpacking -> "Setting up the voice engine…"
+                            progress.engine && f != null -> "Getting the voice engine ${(f * 100).toInt()}%"
                             progress.unpacking -> "Unpacking…"
                             f != null -> "Downloading ${(f * 100).toInt()}%"
                             else -> "Downloading…"
@@ -178,14 +185,14 @@ private fun DownloadRow(
         if (progress != null) {
             TextButton(onClick = onCancel) { Text("Cancel") }
         } else {
-            TextButton(onClick = onDownload) { Text("Get · ${model.sizeMb} MB") }
+            TextButton(onClick = onDownload) { Text("Get · ${AiVoices.downloadMb(LocalContext.current, model)} MB") }
         }
     }
 }
 
 /** One choice in the voice picker: a check when chosen, tap to choose. */
 @Composable
-internal fun PickRow(title: String, detail: String?, selected: Boolean, onClick: () -> Unit) {
+internal fun PickRow(title: String, detail: String?, selected: Boolean, onPlay: (() -> Unit)? = null, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -206,6 +213,11 @@ internal fun PickRow(title: String, detail: String?, selected: Boolean, onClick:
         }
         if (selected) {
             Icon(Icons.Filled.Check, contentDescription = "Chosen", tint = MaterialTheme.colorScheme.primary)
+        }
+        if (onPlay != null) {
+            IconButton(onClick = onPlay) {
+                Icon(Icons.Filled.PlayArrow, contentDescription = "Hear $title", tint = MaterialTheme.colorScheme.primary)
+            }
         }
     }
 }

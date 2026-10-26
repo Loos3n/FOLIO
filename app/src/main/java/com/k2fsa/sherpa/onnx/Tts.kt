@@ -1,5 +1,6 @@
 // From sherpa-onnx v1.12.40 (https://github.com/k2-fsa/sherpa-onnx), Apache License 2.0.
 // Must match the native library's version: its JNI code reads these classes' fields by name.
+// Changed for Folio only where marked.
 // Copyright (c)  2023  Xiaomi Corporation
 package com.k2fsa.sherpa.onnx
 
@@ -262,11 +263,8 @@ class OfflineTts(
         callback: ((samples: FloatArray) -> Int)?
     ): GeneratedAudio
 
-    companion object {
-        init {
-            System.loadLibrary("sherpa-onnx-jni")
-        }
-    }
+    // Folio change: no System.loadLibrary here. The native libraries are downloaded with the
+    // first AI voice, and AiVoices.loadLibraries() loads them before any OfflineTts is made.
 }
 
 // please refer to

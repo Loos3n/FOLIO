@@ -157,6 +157,17 @@ class ReadAloud(
             run++
             pendingStart = { speak(resumeAt) }
         }
+        // Already loaded to play samples: use it straight away.
+        val sampled = sampleSpeech?.takeIf { sampleModel == model }
+        if (sampled != null) {
+            sampleSpeech = null
+            sampleModel = null
+            sampled.stop()
+            sampled.listener = aiListener
+            ai = sampled
+            aiReady()
+            return
+        }
         aiLoader.execute {
             val loaded = runCatching {
                 check(AiVoices.isInstalled(appContext, model)) { "This AI voice isn't downloaded" }
@@ -171,11 +182,83 @@ class ReadAloud(
                     aiError = "Couldn't start the AI voice, so your phone's voice is reading instead."
                     aiModel = null
                 }
-                showEngine()
-                voicesVersion++
-                languageMissing = if (useAi) !aiSpeaksLanguage() else ready && !hasLanguage()
-                runPending()
-                previewIfReady()
+                aiReady()
+            }
+        }
+    }
+
+    private fun aiReady() {
+        showEngine()
+        voicesVersion++
+        languageMissing = if (useAi) !aiSpeaksLanguage() else ready && !hasLanguage()
+        runPending()
+        previewIfReady()
+    }
+
+    /** An AI voice loaded only to play samples in the voice picker, until it's picked or another is sampled. */
+    private var sampleModel: AiVoiceModel? = null
+    private var sampleSpeech: AiSpeech? = null
+    private var sampleRun = 0
+
+    private val quiet = object : AiSpeech.Listener {
+        override fun onStart(run: Int, index: Int) {}
+        override fun onWord(run: Int, index: Int, start: Int, end: Int) {}
+        override fun onDone(run: Int, index: Int) {}
+        override fun onError(run: Int) {}
+    }
+
+    /** Lets go of a voice loaded only for samples, e.g. when the picker closes. */
+    fun dropSamples() = releaseSample()
+
+    private fun releaseSample() {
+        sampleRun++
+        sampleSpeech?.shutdown()
+        sampleSpeech = null
+        sampleModel = null
+    }
+
+    /** A line to say as a sample: the sentence being read if it suits, else a short greeting. */
+    private fun sampleText(language: String?): String =
+        sentences.getOrNull(index)?.trim()?.takeIf { it.length in 20..240 && (this.language?.language ?: "en") == (language ?: "en") }
+            ?: "This is how I'll sound reading your book."
+
+    /**
+     * Plays a sample of a voice without choosing it: an AI voice by its engine key and speaker
+     * number, or one of the phone engine's voices by name.
+     */
+    fun hear(engine: String?, voice: String?) {
+        sampleSpeech?.stop()
+        val model = AiVoices.byEngine(engine)
+        if (model == null) {
+            if (!useAi) preview(voice)
+            return
+        }
+        if (active && !paused) pause()
+        val speaker = voice?.toIntOrNull() ?: 0
+        val text = clean(sampleText(model.language))
+        ai?.stop()
+        sampleSpeech?.stop()
+        if (model == aiModel) {
+            ai?.start(PREVIEW_RUN, listOf(text), 0, speaker, rateState)
+            return
+        }
+        sampleSpeech?.takeIf { sampleModel == model }?.let {
+            it.start(PREVIEW_RUN, listOf(text), 0, speaker, rateState)
+            return
+        }
+        releaseSample()
+        sampleModel = model
+        val myRun = sampleRun
+        aiLoader.execute {
+            val loaded = runCatching { AiVoices.load(appContext, model) }
+            main.post {
+                if (myRun != sampleRun) {
+                    loaded.getOrNull()?.let { runCatching { it.release() } }
+                    return@post
+                }
+                loaded.onSuccess {
+                    sampleSpeech = AiSpeech(it, quiet).also { s -> s.start(PREVIEW_RUN, listOf(text), 0, speaker, rateState) }
+                }.onFailure { sampleModel = null }
             }
         }
     }
@@ -565,6 +648,7 @@ class ReadAloud(
 
     fun shutdown() {
         stop()
+        releaseSample()
         releaseAi()
         aiLoader.shutdown()
         tts.shutdown()
@@ -586,6 +670,7 @@ class ReadAloud(
             pendingStart = { speak(i) }
             return
         }
+        sampleSpeech?.stop()
         ai?.let { speech ->
             speech.start(run, sentences.map(::clean), i, voiceName?.toIntOrNull() ?: 0, rateState)
             queued = sentences.lastIndex

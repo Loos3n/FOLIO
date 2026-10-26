@@ -474,6 +474,8 @@ internal fun ReadAloudSheet(
     aiError: String?,
     /** Chooses an engine and voice together; [hear] plays a sample once it's ready. */
     onPick: (engine: String?, voice: String?, hear: Boolean) -> Unit,
+    /** Plays a sample of a voice without choosing it. */
+    onHear: (engine: String?, voice: String?) -> Unit,
     onGetGoogle: () -> Unit,
     onDownloadVoices: () -> Unit,
     rate: Float,
@@ -499,7 +501,7 @@ internal fun ReadAloudSheet(
                 BackHandler { picking = false }
                 VoicePicker(
                     voices, voice, engines, engine, engineInUse, googleMissingVoices, languageMissing, aiError,
-                    onPick, onGetGoogle, onDownloadVoices, onBack = { picking = false },
+                    onPick, onHear, onGetGoogle, onDownloadVoices, onBack = { picking = false },
                 )
                 return@Column
             }
@@ -599,6 +601,7 @@ private fun VoicePicker(
     languageMissing: Boolean,
     aiError: String?,
     onPick: (engine: String?, voice: String?, hear: Boolean) -> Unit,
+    onHear: (engine: String?, voice: String?) -> Unit,
     onGetGoogle: () -> Unit,
     onDownloadVoices: () -> Unit,
     onBack: () -> Unit,
@@ -609,12 +612,12 @@ private fun VoicePicker(
         Text("Choose a voice", style = MaterialTheme.typography.headlineSmall)
     }
     Text(
-        "Tap a voice to use it and hear how it sounds.",
+        "Tap \u25B6 to hear a voice, or tap its name to use it.",
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
 
-    AiVoicePicker(engine = engine, voice = voice, aiError = aiError, onPick = onPick)
+    AiVoicePicker(engine = engine, voice = voice, aiError = aiError, onPick = onPick, onHear = onHear)
 
     Spacer(Modifier.height(8.dp))
     SectionTitle("Phone voices", "Built into your phone. They work in every language and take no extra space.")
@@ -640,8 +643,10 @@ private fun VoicePicker(
             }
             if (selected) {
                 Column(Modifier.padding(start = 16.dp)) {
-                    PickRow("Best available", "Picked for you", voice == null) { onPick(e.name, null, true) }
-                    voices.forEach { v -> PickRow(v.label, v.detail, voice == v.name) { onPick(e.name, v.name, true) } }
+                    PickRow("Best available", "Picked for you", voice == null, onPlay = { onHear(e.name, null) }) { onPick(e.name, null, false) }
+                    voices.forEach { v ->
+                        PickRow(v.label, v.detail, voice == v.name, onPlay = { onHear(e.name, v.name) }) { onPick(e.name, v.name, false) }
+                    }
                     if (googleMissingVoices || languageMissing) {
                         Text(
                             if (googleMissingVoices) {

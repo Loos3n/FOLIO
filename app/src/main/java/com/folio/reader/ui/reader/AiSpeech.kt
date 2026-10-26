@@ -17,7 +17,7 @@ import kotlin.concurrent.thread
  * is spoken, so word highlights are spread over the sentence by word length.
  * Callbacks arrive on the main thread, tagged with the run they were started with.
  */
-class AiSpeech(private val tts: OfflineTts, private val listener: Listener) {
+class AiSpeech(private val tts: OfflineTts, var listener: Listener) {
     interface Listener {
         fun onStart(run: Int, index: Int)
         fun onWord(run: Int, index: Int, start: Int, end: Int)

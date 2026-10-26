@@ -17,6 +17,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream
 import java.io.BufferedInputStream
@@ -26,6 +28,7 @@ import java.io.FilterInputStream
 import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.zip.ZipInputStream
 
 /** How an AI voice model is put together, which decides how it's loaded. */
 enum class AiKind { Piper, Kokoro, Kitten }
@@ -53,6 +56,16 @@ data class AiVoiceModel(
  */
 object AiVoices {
     const val PREFIX = "folio:"
+
+    /**
+     * The speech engine's native libraries aren't in the APK, which keeps it small for anyone
+     * who never uses AI voices. They're downloaded with the first voice, from a release the
+     * build workflow publishes. The version must match com.k2fsa.sherpa.onnx.Tts.kt.
+     */
+    private const val LIBS_VERSION = "1.12.40"
+    private const val LIBS_URL = "https://github.com/Loos3n/FOLIO/releases/download/speech-libs-$LIBS_VERSION/speech-libs-arm64.zip"
+    /** Rough download size of the libraries, for the button. */
+    private const val LIBS_MB = 15
 
     val models = listOf(
         AiVoiceModel(
@@ -104,10 +117,19 @@ object AiVoices {
     private fun root(context: Context) = File(context.filesDir, "ai-voices")
     private fun dir(context: Context, model: AiVoiceModel) = File(root(context), model.id)
 
-    fun isInstalled(context: Context, model: AiVoiceModel) = File(dir(context, model), ".ready").exists()
+    private fun libsDir(context: Context) = File(context.filesDir, "speech-libs-$LIBS_VERSION")
+    private fun libsReady(context: Context) = File(libsDir(context), ".ready").exists()
+    private fun modelReady(context: Context, model: AiVoiceModel) = File(dir(context, model), ".ready").exists()
 
-    /** A download in progress: how far (0..1, null if unknown), and whether it's unpacking. */
-    data class Progress(val fraction: Float?, val unpacking: Boolean = false)
+    /** Ready to speak: the voice and the speech engine are both on the phone. */
+    fun isInstalled(context: Context, model: AiVoiceModel) = modelReady(context, model) && libsReady(context)
+
+    /** What getting [model] still needs to download, in MB. */
+    fun downloadMb(context: Context, model: AiVoiceModel): Int =
+        (if (modelReady(context, model)) 0 else model.sizeMb) + (if (libsReady(context)) 0 else LIBS_MB)
+
+    /** A download in progress: how far (0..1, null if unknown), whether it's unpacking, and whether it's the speech engine. */
+    data class Progress(val fraction: Float?, val unpacking: Boolean = false, val engine: Boolean = false)
 
     private val _progress = MutableStateFlow<Map<String, Progress>>(emptyMap())
     val progress: StateFlow<Map<String, Progress>> = _progress
@@ -140,7 +162,9 @@ object AiVoices {
                 val archive = File(app.cacheDir, "${model.id}.tar.bz2.part")
                 val staging = File(root(app), "${model.id}.unpacking")
                 try {
-                    fetch(model, archive)
+                    libsLock.withLock { if (!libsReady(app)) getLibraries(app, model) }
+                    if (modelReady(app, model)) return@launch
+                    fetch(model.url, archive) { f -> _progress.update { it + (model.id to Progress(f)) } }
                     ensureActive()
                     _progress.update { it + (model.id to Progress(0f, unpacking = true)) }
                     staging.deleteRecursively()
@@ -174,8 +198,54 @@ object AiVoices {
         refresh(context)
     }
 
-    private suspend fun fetch(model: AiVoiceModel, into: File) {
-        val conn = URL(model.url).openConnection() as HttpURLConnection
+    /** Downloads and unpacks the speech engine's libraries. */
+    private suspend fun getLibraries(context: Context, model: AiVoiceModel) {
+        val zip = File(context.cacheDir, "speech-libs.zip.part")
+        val dir = libsDir(context)
+        try {
+            fetch(LIBS_URL, zip) { f -> _progress.update { it + (model.id to Progress(f, engine = true)) } }
+            _progress.update { it + (model.id to Progress(null, unpacking = true, engine = true)) }
+            dir.deleteRecursively()
+            dir.mkdirs()
+            ZipInputStream(BufferedInputStream(FileInputStream(zip))).use { input ->
+                while (true) {
+                    kotlin.coroutines.coroutineContext.ensureActive()
+                    val entry = input.nextEntry ?: break
+                    // Only plain library files, never paths.
+                    val name = File(entry.name).name
+                    if (entry.isDirectory || !name.endsWith(".so")) continue
+                    File(dir, name).outputStream().use { input.copyTo(it, 64 * 1024) }
+                }
+            }
+            check(File(dir, "libsherpa-onnx-jni.so").exists()) { "The voice engine download was incomplete" }
+            File(dir, ".ready").writeText(LIBS_VERSION)
+        } catch (e: Throwable) {
+            dir.deleteRecursively()
+            throw e
+        } finally {
+            zip.delete()
+        }
+        // Older copies of the libraries aren't needed any more.
+        context.filesDir.listFiles { f -> f.name.startsWith("speech-libs-") && f != dir }?.forEach { it.deleteRecursively() }
+    }
+
+    private var librariesLoaded = false
+    /** Two voices downloading at once share one copy of the libraries. */
+    private val libsLock = Mutex()
+
+    /** Loads the speech engine's libraries, dependencies first. */
+    @Synchronized
+    private fun loadLibraries(context: Context) {
+        if (librariesLoaded) return
+        val files = libsDir(context).listFiles { f -> f.name.endsWith(".so") }.orEmpty()
+        val jni = files.firstOrNull { it.name == "libsherpa-onnx-jni.so" } ?: error("The voice engine isn't downloaded")
+        val order = files.sortedBy { if (it.name.startsWith("libonnxruntime")) 0 else 1 }.filter { it != jni } + jni
+        order.forEach { System.load(it.absolutePath) }
+        librariesLoaded = true
+    }
+
+    private suspend fun fetch(url: String, into: File, onProgress: (Float?) -> Unit) {
+        val conn = URL(url).openConnection() as HttpURLConnection
         conn.connectTimeout = 20_000
         conn.readTimeout = 30_000
         conn.instanceFollowRedirects = true
@@ -196,7 +266,7 @@ object AiVoices {
                         val pct = total?.let { (done * 100 / it).toInt() } ?: -1
                         if (pct != shown) {
                             shown = pct
-                            _progress.update { it + (model.id to Progress(total?.let { t -> done.toFloat() / t })) }
+                            onProgress(total?.let { t -> done.toFloat() / t })
                         }
                     }
                 }
@@ -245,6 +315,7 @@ object AiVoices {
 
     /** Loads [model] for speaking. Slow (a second or more), so call it off the main thread. */
     fun load(context: Context, model: AiVoiceModel): OfflineTts {
+        loadLibraries(context)
         val d = dir(context, model)
         val onnx = d.listFiles { f -> f.isFile && f.extension == "onnx" }.orEmpty()
             .sortedBy { if ("int8" in it.name || "fp16" in it.name) 0 else 1 }
