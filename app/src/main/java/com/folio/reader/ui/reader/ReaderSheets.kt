@@ -28,6 +28,10 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import com.folio.reader.audio.AiVoices
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.activity.compose.BackHandler
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
@@ -46,7 +50,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -455,7 +458,7 @@ internal fun DictionarySheet(term: String, onWebSearch: () -> Unit, onDismiss: (
     }
 }
 
-/** Read-aloud options: sleep timer, speed and voice. */
+/** Read-aloud options: sleep timer, speed and voice. The voice opens its own page to choose from. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun ReadAloudSheet(
@@ -469,20 +472,21 @@ internal fun ReadAloudSheet(
     languageMissing: Boolean,
     /** Why the chosen AI voice couldn't be used, if it couldn't. */
     aiError: String?,
-    onEngine: (String?) -> Unit,
+    /** Chooses an engine and voice together; [hear] plays a sample once it's ready. */
+    onPick: (engine: String?, voice: String?, hear: Boolean) -> Unit,
     onGetGoogle: () -> Unit,
     onDownloadVoices: () -> Unit,
     rate: Float,
     /** Minutes left on the timer, if one is set. */
     sleepMinutes: Int?,
     sleepAtChapterEnd: Boolean,
-    onVoice: (String?) -> Unit,
-    /** Plays a short sample of a voice (null = automatic). */
-    onPreview: (String?) -> Unit,
+    /** Plays a short sample of the current voice. */
+    onPreview: () -> Unit,
     onRate: (Float) -> Unit,
     onSleep: (minutes: Int?, chapterEnd: Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    var picking by rememberSaveable { mutableStateOf(false) }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(
             Modifier
@@ -491,7 +495,66 @@ internal fun ReadAloudSheet(
                 .padding(bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            if (picking) {
+                BackHandler { picking = false }
+                VoicePicker(
+                    voices, voice, engines, engine, engineInUse, googleMissingVoices, languageMissing, aiError,
+                    onPick, onGetGoogle, onDownloadVoices, onBack = { picking = false },
+                )
+                return@Column
+            }
             Text("Read aloud", style = MaterialTheme.typography.headlineSmall)
+
+            Text("Voice", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            val ai = AiVoices.byEngine(engineInUse)
+            val (title, kind) = if (ai != null) {
+                splitSpeaker(ai.speakers.getOrNull(voice?.toIntOrNull() ?: 0) ?: "Voice").first to "AI voice \u00b7 ${ai.name}"
+            } else {
+                (voices.firstOrNull { it.name == voice }?.label ?: "Best available voice") to
+                    "Phone voice \u00b7 " + (engines.firstOrNull { it.name == engineInUse }?.let(::engineName) ?: "your phone")
+            }
+            Surface(
+                onClick = { picking = true },
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(Modifier.padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(kind, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    IconButton(onClick = onPreview) {
+                        Icon(Icons.Filled.PlayArrow, contentDescription = "Hear this voice", tint = MaterialTheme.colorScheme.primary)
+                    }
+                    Text("Change", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(8.dp))
+                }
+            }
+            if (ai == null && AiVoices.supported) {
+                Text(
+                    "Want it to sound more like a person? Tap Change for AI voices.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            Text("Speed", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Slider(
+                    value = rate,
+                    onValueChange = { onRate((it * 20).roundToInt() / 20f) },
+                    valueRange = 0.5f..2f,
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    String.format(java.util.Locale.US, "%.2f", rate).trimEnd('0').trimEnd('.') + "\u00d7",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.width(56.dp),
+                    textAlign = TextAlign.End,
+                )
+            }
 
             Text("Sleep timer", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (sleepMinutes != null) {
@@ -513,105 +576,86 @@ internal fun ReadAloudSheet(
                 }
                 FilterChip(selected = sleepAtChapterEnd, onClick = { onSleep(null, true) }, label = { Text("End of chapter") })
             }
-
-            Text("Speed", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Slider(
-                    value = rate,
-                    onValueChange = { onRate((it * 20).roundToInt() / 20f) },
-                    valueRange = 0.5f..2f,
-                    modifier = Modifier.weight(1f),
-                )
-                Spacer(Modifier.width(12.dp))
-                Text(
-                    String.format(java.util.Locale.US, "%.2f", rate).trimEnd('0').trimEnd('.') + "×",
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.width(56.dp),
-                    textAlign = TextAlign.End,
-                )
-            }
-
-            AiVoicesSection(engine = engine, aiError = aiError, onEngine = onEngine)
-
-            Text("Phone voices", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            val google = engines.firstOrNull { it.name == ReadAloud.GOOGLE_TTS }
-            if (google == null) {
-                Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.secondaryContainer) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("Get more natural voices", style = MaterialTheme.typography.titleSmall)
-                        Text(
-                            "Speech Services by Google is free and sounds much more like a real person than most phones' built-in voice.",
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                        FilledTonalButton(onClick = onGetGoogle) { Text("Get it on Google Play") }
-                    }
-                }
-            }
-            Column {
-                VoiceRow(
-                    "Automatic",
-                    if (google != null) "Google's voices when they're downloaded" else "Your phone's default voice",
-                    engine == null,
-                ) { onEngine(null) }
-                engines.forEach { e ->
-                    VoiceRow(e.label, if (e.name == engineInUse) "Reading now" else null, engine == e.name) { onEngine(e.name) }
-                }
-            }
-            if (googleMissingVoices || languageMissing) {
-                Text(
-                    if (googleMissingVoices) {
-                        "Google's voice for this book's language isn't downloaded yet, so your phone's own voice is reading. Download it for a more natural sound."
-                    } else {
-                        "This voice engine has no voice downloaded for this book's language yet."
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-            }
-            if (google != null || languageMissing) {
-                TextButton(onClick = onDownloadVoices) { Text("Download more natural voices") }
-            }
-
-            Text("Voice", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Column {
-                VoiceRow("Automatic", "The most natural voice on your phone", voice == null, onPlay = { onPreview(null) }) { onVoice(null) }
-                voices.forEach { v ->
-                    VoiceRow(v.label, v.detail, voice == v.name, onPlay = { onPreview(v.name) }) { onVoice(v.name) }
-                }
-                if (voices.isEmpty()) {
-                    Text(
-                        "Install more voices in your phone's text-to-speech settings.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(vertical = 8.dp),
-                    )
-                }
-            }
         }
     }
 }
 
+/** A voice engine's everyday name: "Google" rather than "Speech Recognition and Synthesis from Google". */
+private fun engineName(e: ReadAloud.EngineOption): String = when {
+    e.name == ReadAloud.GOOGLE_TTS -> "Google"
+    e.label.contains("Samsung", ignoreCase = true) -> "Samsung"
+    else -> e.label
+}
+
+/** Every voice in one list: AI voices first, then the phone's own. */
 @Composable
-private fun VoiceRow(label: String, detail: String?, selected: Boolean, onPlay: (() -> Unit)? = null, onClick: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick)
-            .padding(vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        RadioButton(selected = selected, onClick = onClick)
-        Spacer(Modifier.width(8.dp))
-        Column(Modifier.weight(1f)) {
-            Text(label, style = MaterialTheme.typography.bodyLarge)
-            if (detail != null) {
-                Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+private fun VoicePicker(
+    voices: List<ReadAloud.VoiceOption>,
+    voice: String?,
+    engines: List<ReadAloud.EngineOption>,
+    engine: String?,
+    engineInUse: String?,
+    googleMissingVoices: Boolean,
+    languageMissing: Boolean,
+    aiError: String?,
+    onPick: (engine: String?, voice: String?, hear: Boolean) -> Unit,
+    onGetGoogle: () -> Unit,
+    onDownloadVoices: () -> Unit,
+    onBack: () -> Unit,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
+        Spacer(Modifier.width(4.dp))
+        Text("Choose a voice", style = MaterialTheme.typography.headlineSmall)
+    }
+    Text(
+        "Tap a voice to use it and hear how it sounds.",
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+
+    AiVoicePicker(engine = engine, voice = voice, aiError = aiError, onPick = onPick)
+
+    Spacer(Modifier.height(8.dp))
+    SectionTitle("Phone voices", "Built into your phone. They work in every language and take no extra space.")
+    val usingAi = AiVoices.byEngine(engineInUse) != null
+    val google = engines.firstOrNull { it.name == ReadAloud.GOOGLE_TTS }
+    if (google == null) {
+        Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.secondaryContainer) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Get Google's voices", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "Speech Services by Google is free and sounds more natural than most phones' built-in voice.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                FilledTonalButton(onClick = onGetGoogle) { Text("Get it on Google Play") }
             }
         }
-        if (onPlay != null) {
-            IconButton(onClick = onPlay) {
-                Icon(Icons.Filled.PlayArrow, contentDescription = "Hear $label", tint = MaterialTheme.colorScheme.primary)
+    }
+    Column {
+        engines.forEach { e ->
+            val selected = !usingAi && engineInUse == e.name
+            PickRow(engineName(e), if (e.name == ReadAloud.GOOGLE_TTS) "Usually the best phone voice" else null, selected) {
+                onPick(e.name, null, true)
+            }
+            if (selected) {
+                Column(Modifier.padding(start = 16.dp)) {
+                    PickRow("Best available", "Picked for you", voice == null) { onPick(e.name, null, true) }
+                    voices.forEach { v -> PickRow(v.label, v.detail, voice == v.name) { onPick(e.name, v.name, true) } }
+                    if (googleMissingVoices || languageMissing) {
+                        Text(
+                            if (googleMissingVoices) {
+                                "Google's voice for this book's language isn't downloaded yet, so your phone's own voice is reading."
+                            } else {
+                                "This engine has no voice downloaded for this book's language yet."
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        )
+                    }
+                    TextButton(onClick = onDownloadVoices) { Text("Download more ${engineName(e)} voices") }
+                }
             }
         }
     }

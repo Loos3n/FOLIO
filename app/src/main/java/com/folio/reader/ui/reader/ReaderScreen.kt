@@ -862,7 +862,10 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
                 googleMissingVoices = readAloud.googleMissingVoices,
                 languageMissing = readAloud.languageMissing,
                 aiError = readAloud.aiError,
-                onEngine = { name -> vm.updateSettings { it.copy(ttsEngine = name, voice = null) } },
+                onPick = { engine, voice, hear ->
+                    vm.updateSettings { it.copy(ttsEngine = engine, voice = voice) }
+                    if (hear) readAloud.previewSoon(voice)
+                },
                 onGetGoogle = {
                     voiceSetupOpened = true
                     VoiceSetup.getGoogle(context)
@@ -874,8 +877,7 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
                 rate = readAloud.rate,
                 sleepMinutes = sleepEndsAt?.let { ((it - now + 59_999) / 60_000).toInt() },
                 sleepAtChapterEnd = sleepAtChapterEnd,
-                onVoice = { name -> vm.updateSettings { it.copy(voice = name) } },
-                onPreview = { readAloud.preview(it) },
+                onPreview = { readAloud.preview(settings.voice) },
                 onRate = { readAloud.rate = it },
                 onSleep = { minutes, chapterEnd ->
                     sleepAtChapterEnd = chapterEnd

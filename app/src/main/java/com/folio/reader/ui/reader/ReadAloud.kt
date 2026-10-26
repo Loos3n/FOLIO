@@ -175,6 +175,7 @@ class ReadAloud(
                 voicesVersion++
                 languageMissing = if (useAi) !aiSpeaksLanguage() else ready && !hasLanguage()
                 runPending()
+                previewIfReady()
             }
         }
     }
@@ -349,6 +350,24 @@ class ReadAloud(
         tts.speak(clean(sample), TextToSpeech.QUEUE_FLUSH, null, PREVIEW)
     }
 
+    /** A voice to play a sample of once the engine just chosen is ready. */
+    private var pendingPreview: String? = null
+    private var previewWanted = false
+
+    /** Plays a sample of [name] as soon as the voice just picked is ready to speak. */
+    fun previewSoon(name: String?) {
+        pendingPreview = name
+        previewWanted = true
+        // Give the new choice a moment to reach setEngine/setVoice first.
+        main.postDelayed({ previewIfReady() }, 250)
+    }
+
+    private fun previewIfReady() {
+        if (!previewWanted || !canSpeak) return
+        previewWanted = false
+        preview(pendingPreview)
+    }
+
     /** Uses the named voice from the next sentence on (null for the default). */
     fun setVoice(name: String?) {
         voiceName = name
@@ -407,7 +426,10 @@ class ReadAloud(
                 if (!useAi) languageMissing = !hasLanguage()
                 applyVoice()
                 voicesVersion++
-                if (!useAi) runPending()
+                if (!useAi) {
+                    runPending()
+                    previewIfReady()
+                }
                 return@post
             } else if (engine != null) {
                 // The chosen engine wouldn't start: use the phone's default instead.

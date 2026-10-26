@@ -10,12 +10,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -32,24 +32,37 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.folio.reader.audio.AiVoiceModel
 import com.folio.reader.audio.AiVoices
 
-/** The AI voices: download one, pick it, or remove it to free space. */
+/** "Bella (US woman)" as a name and what it is. */
+internal fun splitSpeaker(label: String): Pair<String, String?> =
+    label.substringBefore(" (") to label.substringAfter(" (", "").removeSuffix(")").ifBlank { null }
+
+/**
+ * The AI voices part of the voice picker: every voice of each downloaded model, ready to tap,
+ * then the models still to download.
+ */
 @Composable
-internal fun AiVoicesSection(engine: String?, aiError: String?, onEngine: (String?) -> Unit) {
+internal fun AiVoicePicker(
+    engine: String?,
+    voice: String?,
+    aiError: String?,
+    /** Chooses a voice; [hear] plays a sample of it once it's ready. */
+    onPick: (engine: String?, voice: String?, hear: Boolean) -> Unit,
+) {
     val context = LocalContext.current
-    val installed by remember { AiVoices.installed(context) }.collectAsStateWithLifecycle()
+    val installedIds by remember { AiVoices.installed(context) }.collectAsStateWithLifecycle()
     val progress by AiVoices.progress.collectAsStateWithLifecycle()
     val failed by AiVoices.failed.collectAsStateWithLifecycle()
+    val installed = installedIds.orEmpty()
     // Voices downloaded from here are switched to as soon as they're ready.
     val started = remember { mutableStateListOf<String>() }
     LaunchedEffect(installed) {
-        val ready = started.filter { it in installed.orEmpty() }
-        ready.forEach { id ->
+        started.filter { it in installed }.forEach { id ->
             started.remove(id)
-            AiVoices.models.firstOrNull { it.id == id }?.let { onEngine(it.engineKey) }
+            AiVoices.models.firstOrNull { it.id == id }?.let { onPick(it.engineKey, "0", true) }
         }
     }
 
-    Text("AI voices", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    SectionTitle("AI voices", "The most natural. Made on your phone, so they work offline. English only.")
     if (!AiVoices.supported) {
         Text(
             "AI voices need a phone with a 64-bit processor.",
@@ -58,74 +71,100 @@ internal fun AiVoicesSection(engine: String?, aiError: String?, onEngine: (Strin
         )
         return
     }
-    Text(
-        "Lifelike voices made on your phone. Download one once and it works offline. English only for now.",
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
     if (aiError != null) {
         Text(aiError, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
     }
-    Column {
-        AiVoices.models.forEach { model ->
-            AiModelRow(
-                model = model,
-                installed = model.id in installed.orEmpty(),
-                selected = engine == model.engineKey,
-                progress = progress[model.id],
-                error = failed?.takeIf { it.first == model.id }?.second,
-                onSelect = { onEngine(model.engineKey) },
-                onDownload = {
-                    started.add(model.id)
-                    AiVoices.download(context, model)
-                },
-                onCancel = {
-                    started.remove(model.id)
-                    AiVoices.cancel(model)
-                },
-                onDelete = {
-                    if (engine == model.engineKey) onEngine(null)
+
+    val have = AiVoices.models.filter { it.id in installed }
+    have.forEach { model ->
+        Column {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    model.name,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(onClick = {
+                    if (engine == model.engineKey) onPick(null, null, false)
                     AiVoices.delete(context, model)
-                },
-            )
+                }) {
+                    Icon(Icons.Filled.Delete, contentDescription = "Remove ${model.name}", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            val chosen = if (engine == model.engineKey) voice?.toIntOrNull() ?: 0 else -1
+            model.speakers.forEachIndexed { i, speaker ->
+                val (name, what) = splitSpeaker(speaker)
+                PickRow(name, what, selected = i == chosen) { onPick(model.engineKey, i.toString(), true) }
+            }
+        }
+    }
+
+    val more = AiVoices.models.filter { it.id !in installed }
+    if (more.isNotEmpty()) {
+        Text(
+            if (have.isEmpty()) "Download one to start" else "More AI voices",
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+        Column {
+            more.forEach { model ->
+                DownloadRow(
+                    model = model,
+                    progress = progress[model.id],
+                    error = failed?.takeIf { it.first == model.id }?.second,
+                    onDownload = {
+                        started.add(model.id)
+                        AiVoices.download(context, model)
+                    },
+                    onCancel = {
+                        started.remove(model.id)
+                        AiVoices.cancel(model)
+                    },
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun AiModelRow(
+internal fun SectionTitle(title: String, subtitle: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(title, style = MaterialTheme.typography.titleMedium)
+        Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun DownloadRow(
     model: AiVoiceModel,
-    installed: Boolean,
-    selected: Boolean,
     progress: AiVoices.Progress?,
     error: String?,
-    onSelect: () -> Unit,
     onDownload: () -> Unit,
     onCancel: () -> Unit,
-    onDelete: () -> Unit,
 ) {
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .clickable(enabled = installed, onClick = onSelect)
-            .padding(vertical = 4.dp),
+            .padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        RadioButton(selected = selected, onClick = onSelect, enabled = installed)
-        Spacer(Modifier.width(8.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(model.name, style = MaterialTheme.typography.bodyLarge)
             Text(model.blurb, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             when {
                 progress != null -> {
-                    val label = when {
-                        progress.unpacking -> "Unpacking…"
-                        progress.fraction != null -> "Downloading ${(progress.fraction * 100).toInt()}%"
-                        else -> "Downloading…"
-                    }
-                    Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                     val f = progress.fraction
+                    Text(
+                        when {
+                            progress.unpacking -> "Unpacking…"
+                            f != null -> "Downloading ${(f * 100).toInt()}%"
+                            else -> "Downloading…"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
                     if (f != null) {
                         LinearProgressIndicator(progress = { f }, modifier = Modifier.fillMaxWidth().padding(top = 2.dp))
                     } else {
@@ -135,12 +174,38 @@ private fun AiModelRow(
                 error != null -> Text(error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             }
         }
-        when {
-            progress != null -> TextButton(onClick = onCancel) { Text("Cancel") }
-            installed -> IconButton(onClick = onDelete) {
-                Icon(Icons.Filled.Delete, contentDescription = "Remove ${model.name}", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.width(8.dp))
+        if (progress != null) {
+            TextButton(onClick = onCancel) { Text("Cancel") }
+        } else {
+            TextButton(onClick = onDownload) { Text("Get · ${model.sizeMb} MB") }
+        }
+    }
+}
+
+/** One choice in the voice picker: a check when chosen, tap to choose. */
+@Composable
+internal fun PickRow(title: String, detail: String?, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.bodyLarge,
+                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+            )
+            if (detail != null) {
+                Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            else -> TextButton(onClick = onDownload) { Text("Get · ${model.sizeMb} MB") }
+        }
+        if (selected) {
+            Icon(Icons.Filled.Check, contentDescription = "Chosen", tint = MaterialTheme.colorScheme.primary)
         }
     }
 }
