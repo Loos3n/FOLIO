@@ -65,7 +65,7 @@ object AiVoices {
     private const val LIBS_VERSION = "1.12.40"
     private const val LIBS_URL = "https://github.com/Loos3n/FOLIO/releases/download/speech-libs-$LIBS_VERSION/speech-libs-arm64.zip"
     /** Rough download size of the libraries, for the button. */
-    private const val LIBS_MB = 15
+    private const val LIBS_MB = 11
 
     val models = listOf(
         AiVoiceModel(

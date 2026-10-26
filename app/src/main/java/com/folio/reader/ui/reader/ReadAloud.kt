@@ -201,26 +201,80 @@ class ReadAloud(
     private var sampleRun = 0
 
     private val quiet = object : AiSpeech.Listener {
-        override fun onStart(run: Int, index: Int) {}
+        override fun onStart(run: Int, index: Int) {
+            sampleLoading = null
+        }
         override fun onWord(run: Int, index: Int, start: Int, end: Int) {}
         override fun onDone(run: Int, index: Int) {}
-        override fun onError(run: Int) {}
+        override fun onError(run: Int) {
+            sampleLoading = null
+        }
     }
 
-    /** Lets go of a voice loaded only for samples, e.g. when the picker closes. */
-    fun dropSamples() = releaseSample()
+    /** Reading was paused to play a sample, and carries on once a voice is picked or the menu closes. */
+    private var pausedForSample = false
+
+    /** The AI voice ("engine/voice") whose sample is getting ready, so the picker can show it's coming. */
+    var sampleLoading by mutableStateOf<String?>(null)
+        private set
+
+    private fun sampleKey(engine: String?, voice: String?) = "$engine/$voice"
+
+    /** The voice menu closed: let go of any voice loaded only for samples, and carry on reading. */
+    fun closeVoiceMenu() {
+        releaseSample()
+        ai?.takeIf { !active || paused }?.stop()
+        if (pausedForSample) resume()
+    }
+
+    /**
+     * Uses this voice from now on. While reading, the current sentence starts again in the new
+     * voice straight away; otherwise a short sample plays if [sample] is set.
+     */
+    fun choose(engine: String?, voice: String?, sample: Boolean) {
+        sampleLoading = null
+        sampleSpeech?.stop()
+        if (pausedForSample && active && paused) {
+            pausedForSample = false
+            paused = false
+            onStateChange()
+        }
+        pausedForSample = false
+        val reading = active && !paused
+        // Quiet now, so the old voice doesn't carry on while the new one gets ready.
+        run++
+        ai?.stop()
+        if (ready) tts.stop()
+        setEngine(engine)
+        setVoice(voice, restart = false)
+        if (reading) {
+            run++
+            speak(index)
+        } else if (sample) {
+            pendingPreview = voice
+            previewWanted = true
+            previewIfReady()
+        }
+    }
 
     private fun releaseSample() {
         sampleRun++
+        sampleLoading = null
         sampleSpeech?.shutdown()
         sampleSpeech = null
         sampleModel = null
     }
 
-    /** A line to say as a sample: the sentence being read if it suits, else a short greeting. */
-    private fun sampleText(language: String?): String =
-        sentences.getOrNull(index)?.trim()?.takeIf { it.length in 20..240 && (this.language?.language ?: "en") == (language ?: "en") }
-            ?: "This is how I'll sound reading your book."
+    /** Pauses reading for a sample; it carries on when a voice is picked or the menu closes. */
+    private fun pauseForSample() {
+        if (active && !paused) {
+            pause()
+            pausedForSample = true
+        }
+    }
+
+    /** Short, so a sample starts quickly and every voice says the same thing. */
+    private val aiSample = "Hi! This is how I'll sound reading your book."
 
     /**
      * Plays a sample of a voice without choosing it: an AI voice by its engine key and speaker
@@ -233,20 +287,22 @@ class ReadAloud(
             if (!useAi) preview(voice)
             return
         }
-        if (active && !paused) pause()
+        pauseForSample()
         val speaker = voice?.toIntOrNull() ?: 0
-        val text = clean(sampleText(model.language))
+        val text = listOf(aiSample)
         ai?.stop()
         sampleSpeech?.stop()
-        if (model == aiModel) {
-            ai?.start(PREVIEW_RUN, listOf(text), 0, speaker, rateState)
+        sampleLoading = sampleKey(engine, voice)
+        if (model == aiModel && ai != null) {
+            ai?.start(PREVIEW_RUN, text, 0, speaker, rateState)
             return
         }
         sampleSpeech?.takeIf { sampleModel == model }?.let {
-            it.start(PREVIEW_RUN, listOf(text), 0, speaker, rateState)
+            it.start(PREVIEW_RUN, text, 0, speaker, rateState)
             return
         }
         releaseSample()
+        sampleLoading = sampleKey(engine, voice)
         sampleModel = model
         val myRun = sampleRun
         aiLoader.execute {
@@ -257,8 +313,11 @@ class ReadAloud(
                     return@post
                 }
                 loaded.onSuccess {
-                    sampleSpeech = AiSpeech(it, quiet).also { s -> s.start(PREVIEW_RUN, listOf(text), 0, speaker, rateState) }
-                }.onFailure { sampleModel = null }
+                    sampleSpeech = AiSpeech(it, quiet).also { s -> s.start(PREVIEW_RUN, text, 0, speaker, rateState) }
+                }.onFailure {
+                    sampleModel = null
+                    sampleLoading = null
+                }
             }
         }
     }
@@ -297,6 +356,7 @@ class ReadAloud(
 
     private val aiListener = object : AiSpeech.Listener {
         override fun onStart(run: Int, index: Int) {
+            if (run == PREVIEW_RUN) sampleLoading = null
             if (run != this@ReadAloud.run) return
             this@ReadAloud.index = index
             onSentence(index)
@@ -312,6 +372,7 @@ class ReadAloud(
         }
 
         override fun onError(run: Int) {
+            if (run == PREVIEW_RUN) sampleLoading = null
             if (run != this@ReadAloud.run) return
             aiError = "The AI voice stopped unexpectedly."
             stop()
@@ -412,14 +473,13 @@ class ReadAloud(
      */
     fun preview(name: String?) {
         ai?.let { speech ->
-            if (active && !paused) pause()
-            val sample = sentences.getOrNull(index)?.trim()?.takeIf { it.length in 20..240 && aiSpeaksLanguage() }
-                ?: "This is how I'll sound reading your book."
-            speech.start(PREVIEW_RUN, listOf(clean(sample)), 0, name?.toIntOrNull() ?: 0, rateState)
+            pauseForSample()
+            sampleLoading = sampleKey(aiModel?.engineKey, name)
+            speech.start(PREVIEW_RUN, listOf(aiSample), 0, name?.toIntOrNull() ?: 0, rateState)
             return
         }
         if (useAi || !ready) return
-        if (active && !paused) pause()
+        pauseForSample()
         val voice = name?.let { n -> runCatching { tts.voices }.getOrNull()?.firstOrNull { it.name == n } } ?: bestVoice()
         if (voice != null) runCatching { tts.voice = voice }
         previewing = true
@@ -437,25 +497,18 @@ class ReadAloud(
     private var pendingPreview: String? = null
     private var previewWanted = false
 
-    /** Plays a sample of [name] as soon as the voice just picked is ready to speak. */
-    fun previewSoon(name: String?) {
-        pendingPreview = name
-        previewWanted = true
-        // Give the new choice a moment to reach setEngine/setVoice first.
-        main.postDelayed({ previewIfReady() }, 250)
-    }
-
     private fun previewIfReady() {
         if (!previewWanted || !canSpeak) return
         previewWanted = false
         preview(pendingPreview)
     }
 
-    /** Uses the named voice from the next sentence on (null for the default). */
-    fun setVoice(name: String?) {
+    /** Uses the named voice (null for the default), starting the current sentence again in it if [restart]. */
+    fun setVoice(name: String?, restart: Boolean = true) {
+        if (name == voiceName) return
         voiceName = name
         if (useAi) {
-            if (ai != null && active && !paused) {
+            if (restart && ai != null && active && !paused) {
                 run++
                 speak(index)
             }
@@ -463,7 +516,7 @@ class ReadAloud(
         }
         if (!ready) return
         applyVoice()
-        if (active && !paused) {
+        if (restart && active && !paused) {
             run++
             speak(index)
         }
@@ -592,6 +645,7 @@ class ReadAloud(
 
     /** Starts reading [texts] from the first sentence. */
     fun play(texts: List<String>) {
+        pausedForSample = false
         run++
         sentences = texts
         active = true
@@ -620,6 +674,7 @@ class ReadAloud(
     }
 
     fun pause() {
+        pausedForSample = false
         if (!active || paused) return
         run++
         paused = true
@@ -629,6 +684,7 @@ class ReadAloud(
     }
 
     fun resume() {
+        pausedForSample = false
         if (!active || !paused) return
         run++
         paused = false
@@ -637,6 +693,7 @@ class ReadAloud(
     }
 
     fun stop() {
+        pausedForSample = false
         run++
         active = false
         paused = false

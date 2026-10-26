@@ -15,6 +15,7 @@ import kotlin.concurrent.thread
  * Speaks sentences with an on-phone AI voice. Each sentence is made into audio a couple ahead
  * of the one playing, so speech flows on without gaps. The model doesn't say when each word
  * is spoken, so word highlights are spread over the sentence by word length.
+ * A long first sentence is made in two parts, so speech starts sooner after a start or a skip.
  * Callbacks arrive on the main thread, tagged with the run they were started with.
  */
 class AiSpeech(private val tts: OfflineTts, var listener: Listener) {
@@ -32,14 +33,16 @@ class AiSpeech(private val tts: OfflineTts, var listener: Listener) {
     val speakers: Int = runCatching { tts.numSpeakers() }.getOrDefault(1).coerceAtLeast(1)
     @Volatile private var job: Job? = null
 
-    private class Clip(val index: Int, val text: String, val samples: FloatArray)
+    /** Audio for [text], which starts at [offset] in sentence [index]; [last] is the sentence's final part. */
+    private class Clip(val index: Int, val text: String, val offset: Int, val first: Boolean, val last: Boolean, val samples: FloatArray)
 
-    /** A sentence's place in the audio track, in frames. */
-    private class Span(val index: Int, val text: String, val start: Long, val end: Long) {
+    /** A sentence (or part of one) in the audio track, in frames. */
+    private class Span(val clip: Clip, val start: Long, val end: Long) {
+        val index get() = clip.index
         var started = false
         var done = false
         var word = -1
-        val words: List<IntRange> = Regex("\\S+").findAll(text).map { it.range }.toList()
+        val words: List<IntRange> = Regex("\\S+").findAll(clip.text).map { it.range }.toList()
     }
 
     private inner class Job(
@@ -88,15 +91,35 @@ class AiSpeech(private val tts: OfflineTts, var listener: Listener) {
         for (i in j.from until j.texts.size) {
             if (j.cancelled) return
             val text = j.texts[i]
-            val samples = if (text.isBlank()) FloatArray(0) else try {
-                tts.generate(text, sid = j.speaker, speed = j.speed).samples
-            } catch (e: Throwable) {
-                main.post { if (!j.cancelled) listener.onError(j.run) }
-                return
+            val parts = if (i == j.from) firstParts(text) else listOf(text.indices)
+            parts.forEachIndexed { k, range ->
+                if (j.cancelled) return
+                val piece = text.substring(range)
+                val samples = if (piece.isBlank()) FloatArray(0) else try {
+                    tts.generate(piece, sid = j.speaker, speed = j.speed).samples
+                } catch (e: Throwable) {
+                    main.post { if (!j.cancelled) listener.onError(j.run) }
+                    return
+                }
+                if (!offer(j, Clip(i, piece, range.first, k == 0, k == parts.lastIndex, samples))) return
             }
-            if (!offer(j, Clip(i, text, samples))) return
         }
-        offer(j, Clip(END, "", FloatArray(0)))
+        offer(j, Clip(END, "", 0, true, true, FloatArray(0)))
+    }
+
+    /**
+     * Splits a long sentence at a comma (or similar) about a third of the way in, so its start
+     * can play while the rest is made. Short sentences, or ones with no such pause, stay whole.
+     */
+    private fun firstParts(text: String): List<IntRange> {
+        if (text.length < 70) return listOf(text.indices)
+        val aim = text.length / 3
+        val cut = Regex("[,;:—–] ").findAll(text)
+            .map { it.range.last + 1 }
+            .filter { it >= 25 && text.length - it >= 25 }
+            .minByOrNull { kotlin.math.abs(it - aim) }
+            ?: return listOf(text.indices)
+        return listOf(0 until cut, cut until text.length)
     }
 
     private fun offer(j: Job, clip: Clip): Boolean {
@@ -140,9 +163,10 @@ class AiSpeech(private val tts: OfflineTts, var listener: Listener) {
                     j.total = written
                     break
                 }
-                j.spans.add(Span(clip.index, clip.text, written, written + clip.samples.size))
+                j.spans.add(Span(clip, written, written + clip.samples.size))
                 if (!write(j, track, clip.samples)) break
                 written += clip.samples.size
+                if (!clip.last) continue
                 if (!write(j, track, gap)) break
                 written += gap.size
             }
@@ -180,11 +204,11 @@ class AiSpeech(private val tts: OfflineTts, var listener: Listener) {
                 if (pos < s.start) break
                 if (!s.started) {
                     s.started = true
-                    listener.onStart(j.run, s.index)
+                    if (s.clip.first) listener.onStart(j.run, s.index)
                 }
                 if (pos >= s.end) {
                     s.done = true
-                    listener.onDone(j.run, s.index)
+                    if (s.clip.last) listener.onDone(j.run, s.index)
                     if (j.cancelled) return
                     continue
                 }
@@ -192,7 +216,7 @@ class AiSpeech(private val tts: OfflineTts, var listener: Listener) {
                 if (w != s.word && w >= 0) {
                     s.word = w
                     val r = s.words[w]
-                    listener.onWord(j.run, s.index, r.first, r.last + 1)
+                    listener.onWord(j.run, s.index, s.clip.offset + r.first, s.clip.offset + r.last + 1)
                 }
                 break
             }

@@ -863,10 +863,11 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
                 languageMissing = readAloud.languageMissing,
                 aiError = readAloud.aiError,
                 onPick = { engine, voice, hear ->
+                    readAloud.choose(engine, voice, sample = hear)
                     vm.updateSettings { it.copy(ttsEngine = engine, voice = voice) }
-                    if (hear) readAloud.previewSoon(voice)
                 },
                 onHear = { engine, voice -> readAloud.hear(engine, voice) },
+                sampleLoading = readAloud.sampleLoading,
                 onGetGoogle = {
                     voiceSetupOpened = true
                     VoiceSetup.getGoogle(context)
@@ -887,7 +888,7 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
                 },
                 onDismiss = {
                     showReadAloudSheet = false
-                    readAloud.dropSamples()
+                    readAloud.closeVoiceMenu()
                 },
             )
         }

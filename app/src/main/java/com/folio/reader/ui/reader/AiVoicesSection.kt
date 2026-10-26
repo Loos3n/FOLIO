@@ -7,12 +7,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -50,6 +52,8 @@ internal fun AiVoicePicker(
     onPick: (engine: String?, voice: String?, hear: Boolean) -> Unit,
     /** Plays a sample of a voice without choosing it. */
     onHear: (engine: String?, voice: String?) -> Unit,
+    /** The voice ("engine/voice") whose sample is getting ready, if any. */
+    sampleLoading: String? = null,
 ) {
     val context = LocalContext.current
     val installedIds by remember { AiVoices.installed(context) }.collectAsStateWithLifecycle()
@@ -98,7 +102,11 @@ internal fun AiVoicePicker(
             val chosen = if (engine == model.engineKey) voice?.toIntOrNull() ?: 0 else -1
             model.speakers.forEachIndexed { i, speaker ->
                 val (name, what) = splitSpeaker(speaker)
-                PickRow(name, what, selected = i == chosen, onPlay = { onHear(model.engineKey, i.toString()) }) {
+                PickRow(
+                    name, what, selected = i == chosen,
+                    loading = sampleLoading == "${model.engineKey}/$i",
+                    onPlay = { onHear(model.engineKey, i.toString()) },
+                ) {
                     onPick(model.engineKey, i.toString(), false)
                 }
             }
@@ -192,7 +200,15 @@ private fun DownloadRow(
 
 /** One choice in the voice picker: a check when chosen, tap to choose. */
 @Composable
-internal fun PickRow(title: String, detail: String?, selected: Boolean, onPlay: (() -> Unit)? = null, onClick: () -> Unit) {
+internal fun PickRow(
+    title: String,
+    detail: String?,
+    selected: Boolean,
+    /** Its sample is getting ready to play. */
+    loading: Boolean = false,
+    onPlay: (() -> Unit)? = null,
+    onClick: () -> Unit,
+) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -216,7 +232,11 @@ internal fun PickRow(title: String, detail: String?, selected: Boolean, onPlay: 
         }
         if (onPlay != null) {
             IconButton(onClick = onPlay) {
-                Icon(Icons.Filled.PlayArrow, contentDescription = "Hear $title", tint = MaterialTheme.colorScheme.primary)
+                if (loading) {
+                    CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                } else {
+                    Icon(Icons.Filled.PlayArrow, contentDescription = "Hear $title", tint = MaterialTheme.colorScheme.primary)
+                }
             }
         }
     }

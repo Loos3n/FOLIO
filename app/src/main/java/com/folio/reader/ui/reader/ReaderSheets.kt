@@ -476,6 +476,8 @@ internal fun ReadAloudSheet(
     onPick: (engine: String?, voice: String?, hear: Boolean) -> Unit,
     /** Plays a sample of a voice without choosing it. */
     onHear: (engine: String?, voice: String?) -> Unit,
+    /** The AI voice ("engine/voice") whose sample is getting ready, if any. */
+    sampleLoading: String?,
     onGetGoogle: () -> Unit,
     onDownloadVoices: () -> Unit,
     rate: Float,
@@ -501,7 +503,7 @@ internal fun ReadAloudSheet(
                 BackHandler { picking = false }
                 VoicePicker(
                     voices, voice, engines, engine, engineInUse, googleMissingVoices, languageMissing, aiError,
-                    onPick, onHear, onGetGoogle, onDownloadVoices, onBack = { picking = false },
+                    onPick, onHear, sampleLoading, onGetGoogle, onDownloadVoices, onBack = { picking = false },
                 )
                 return@Column
             }
@@ -602,6 +604,7 @@ private fun VoicePicker(
     aiError: String?,
     onPick: (engine: String?, voice: String?, hear: Boolean) -> Unit,
     onHear: (engine: String?, voice: String?) -> Unit,
+    sampleLoading: String?,
     onGetGoogle: () -> Unit,
     onDownloadVoices: () -> Unit,
     onBack: () -> Unit,
@@ -617,7 +620,7 @@ private fun VoicePicker(
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
 
-    AiVoicePicker(engine = engine, voice = voice, aiError = aiError, onPick = onPick, onHear = onHear)
+    AiVoicePicker(engine = engine, voice = voice, aiError = aiError, onPick = onPick, onHear = onHear, sampleLoading = sampleLoading)
 
     Spacer(Modifier.height(8.dp))
     SectionTitle("Phone voices", "Built into your phone. They work in every language and take no extra space.")
