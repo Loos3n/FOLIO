@@ -273,6 +273,7 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
         lateinit var self: ReadAloud
         ReadAloud(
             context,
+            settings.ttsEngine,
             onSentence = { i -> webView?.evaluateJavascript("window.folio && folio.ttsMark($i,-1,-1)", null) },
             onWord = { i, start, end -> webView?.evaluateJavascript("window.folio && folio.ttsMark($i,$start,$end)", null) },
             onFinished = {
@@ -297,6 +298,15 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
     }
     DisposableEffect(readAloud) { onDispose { readAloud.shutdown() } }
     LaunchedEffect(settings.voice) { readAloud.setVoice(settings.voice) }
+    LaunchedEffect(settings.ttsEngine) { readAloud.setEngine(settings.ttsEngine) }
+    // Back from the Play Store or a voice download: look again for engines and voices.
+    var voiceSetupOpened by remember { mutableStateOf(false) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        if (voiceSetupOpened) {
+            voiceSetupOpened = false
+            readAloud.refresh()
+        }
+    }
     LaunchedEffect(readAloud.rate) {
         if (readAloud.rate != settings.speechRate) vm.updateSettings { it.copy(speechRate = readAloud.rate) }
     }
@@ -844,19 +854,42 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
         }
         if (showReadAloudSheet) {
             ReadAloudSheet(
-                voices = remember { readAloud.voices() },
+                voices = remember(readAloud.voicesVersion) { readAloud.voices() },
                 voice = settings.voice,
+                engines = remember(readAloud.voicesVersion) { readAloud.engines() },
+                engine = settings.ttsEngine,
+                engineInUse = readAloud.engineInUse,
+                googleMissingVoices = readAloud.googleMissingVoices,
+                languageMissing = readAloud.languageMissing,
+                aiError = readAloud.aiError,
+                onPick = { engine, voice, hear ->
+                    readAloud.choose(engine, voice, sample = hear)
+                    vm.updateSettings { it.copy(ttsEngine = engine, voice = voice) }
+                },
+                onHear = { engine, voice -> readAloud.hear(engine, voice) },
+                sampleLoading = readAloud.sampleLoading,
+                onGetGoogle = {
+                    voiceSetupOpened = true
+                    VoiceSetup.getGoogle(context)
+                },
+                onDownloadVoices = {
+                    voiceSetupOpened = true
+                    VoiceSetup.downloadVoices(context, if (readAloud.googleMissingVoices) ReadAloud.GOOGLE_TTS else readAloud.engineInUse)
+                },
                 rate = readAloud.rate,
                 sleepMinutes = sleepEndsAt?.let { ((it - now + 59_999) / 60_000).toInt() },
                 sleepAtChapterEnd = sleepAtChapterEnd,
-                onVoice = { name -> vm.updateSettings { it.copy(voice = name) } },
+                onPreview = { readAloud.preview(settings.voice) },
                 onRate = { readAloud.rate = it },
                 onSleep = { minutes, chapterEnd ->
                     sleepAtChapterEnd = chapterEnd
                     sleepEndsAt = minutes?.let { System.currentTimeMillis() + it * 60_000L }
                     now = System.currentTimeMillis()
                 },
-                onDismiss = { showReadAloudSheet = false },
+                onDismiss = {
+                    showReadAloudSheet = false
+                    readAloud.closeVoiceMenu()
+                },
             )
         }
         defineTerm?.let { term ->

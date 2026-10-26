@@ -28,6 +28,40 @@ jobs:
           fi
           openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in signing/folio.jks.enc -out "$RUNNER_TEMP/folio.jks" -pass env:FOLIO_SIGNING_PASSWORD
           echo "FOLIO_KEYSTORE=$RUNNER_TEMP/folio.jks" >> "$GITHUB_ENV"
+      # The on-phone AI voices run on sherpa-onnx. Its Kotlin side lives in the app
+      # (com.k2fsa.sherpa.onnx.Tts.kt). The native engine isn't built into the APK. The app downloads it with the first AI
+      # voice, from this release, so the APK stays small.
+      - name: Publish the speech engine libraries
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V=1.12.40
+          mkdir sherpa libs
+          if curl -fsSL -o sherpa.tar.bz2 "https://github.com/k2-fsa/sherpa-onnx/releases/download/v$V/sherpa-onnx-v$V-android.tar.bz2"; then
+            tar xjf sherpa.tar.bz2 -C sherpa
+          else
+            curl -fsSL -o sherpa.aar "https://github.com/k2-fsa/sherpa-onnx/releases/download/v$V/sherpa-onnx-$V.aar"
+            unzip -q sherpa.aar -d sherpa
+          fi
+          find sherpa -path '*arm64-v8a*' -name '*.so' -exec cp {} libs/ \;
+          test -f libs/libsherpa-onnx-jni.so
+          echo "jni needs:"; readelf -d libs/libsherpa-onnx-jni.so | sed -n 's/.*Shared library: \[\(.*\)\]/\1/p'
+          keep="libsherpa-onnx-jni.so libonnxruntime.so"
+          for n in $(readelf -d libs/libsherpa-onnx-jni.so | sed -n 's/.*Shared library: \[\(.*\)\]/\1/p'); do
+            [ -f "libs/$n" ] && keep="$keep $n"
+          done
+          (cd libs && zip -9 ../speech-libs-arm64.zip $(echo $keep | tr ' ' '\n' | sort -u))
+          unzip -l speech-libs-arm64.zip
+          gh release view "speech-libs-$V" >/dev/null 2>&1 || gh release create "speech-libs-$V" speech-libs-arm64.zip \
+            --prerelease --latest=false \
+            --title "Speech engine libraries $V" \
+            --notes "sherpa-onnx $V native libraries (arm64). Folio downloads these with the first AI voice."
+      - name: Check the AI voice downloads
+        run: |
+          for id in kokoro-int8-en-v0_19 vits-piper-en_US-lessac-medium vits-piper-en_GB-alba-medium kitten-nano-en-v0_1-fp16; do
+            size=$(curl -sIL "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/$id.tar.bz2" | grep -i '^content-length' | tail -1 | tr -dc 0-9)
+            echo "$id ${size:-missing}"
+          done
       - run: ./gradlew assembleDebug
         env:
           FOLIO_SIGNING_PASSWORD: ${{ secrets.FOLIO_SIGNING_PASSWORD }}

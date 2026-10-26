@@ -1,11 +1,16 @@
 package com.folio.reader.ui.reader
 
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.Voice
+import com.folio.reader.audio.AiVoiceModel
+import com.folio.reader.audio.AiVoices
+import java.util.concurrent.Executors
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -19,6 +24,8 @@ import java.util.Locale
  */
 class ReadAloud(
     context: Context,
+    /** The text-to-speech engine to start with (null = automatic). */
+    engine: String? = null,
     private val onSentence: (index: Int) -> Unit,
     private val onWord: (index: Int, start: Int, end: Int) -> Unit,
     /** Every sentence handed to [play] has been spoken. */
@@ -41,15 +48,20 @@ class ReadAloud(
         set(value) {
             if (value == rateState) return
             rateState = value
-            if (ready && active && !paused) {
+            if (canSpeak && active && !paused) {
                 run++
                 speak(index)
             }
         }
 
-    private companion object {
+    companion object {
         /** Sentences kept queued beyond the one being spoken. */
-        const val AHEAD = 2
+        private const val AHEAD = 2
+        /** Speech Services by Google, whose voices sound the most natural on most phones. */
+        const val GOOGLE_TTS = "com.google.android.tts"
+        private const val PREVIEW = "preview"
+        /** AI voice samples run under this, which no reading run ever has. */
+        private const val PREVIEW_RUN = Int.MIN_VALUE
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -63,14 +75,372 @@ class ReadAloud(
     private var run = 0
     private var language: Locale? = null
 
-    private val tts: TextToSpeech = TextToSpeech(context.applicationContext) { status -> onInit(status) }
+    private val appContext = context.applicationContext
+    /** The engine actually speaking, once it's ready: a package name, or an AI voice's engine key. */
+    var engineInUse by mutableStateOf<String?>(null)
+        private set
+    /** The phone engine that started last, shown when no AI voice is in use. */
+    private var systemEngine: String? = null
+    /** Why the chosen AI voice couldn't be used, if it couldn't. */
+    var aiError by mutableStateOf<String?>(null)
+        private set
+
+    /** The AI voice model chosen, if any; reading uses it instead of the phone's engine. */
+    private var aiModel: AiVoiceModel? = null
+    /** The loaded model, once it's ready to speak. */
+    private var ai: AiSpeech? = null
+    private var aiRun = 0
+    private val aiLoader = Executors.newSingleThreadExecutor()
+    private val useAi get() = aiModel != null
+    private val canSpeak get() = if (useAi) ai != null else ready
+    /** Automatic wanted Google's voices, but Google has none downloaded for the book's language. */
+    var googleMissingVoices by mutableStateOf(false)
+        private set
+    /** The engine in use has no downloaded voice for the book's language. */
+    var languageMissing by mutableStateOf(false)
+        private set
+    /** Changes whenever the engine or its voices may have changed, so lists can be re-read. */
+    var voicesVersion by mutableStateOf(0)
+        private set
+
+    /** The engine asked for: a package name, or null for automatic (Google's when it has the language). */
+    private var enginePref: String? = engine?.takeUnless { it.startsWith(AiVoices.PREFIX) }
+    /** Bumped each time the engine is recreated, so a late init from an old one is ignored. */
+    private var engineRun = 0
+    /** The engine last started (null = the phone's default). */
+    private var requested: String? = null
+    private var tts: TextToSpeech = create(wantedEngine())
     private var voiceName: String? = null
+
+    /** A text-to-speech app on the phone. */
+    data class EngineOption(val name: String, val label: String)
+
+    /** Every text-to-speech app installed. */
+    fun engines(): List<EngineOption> {
+        val pm = appContext.packageManager
+        return runCatching { pm.queryIntentServices(Intent(TextToSpeech.Engine.INTENT_ACTION_TTS_SERVICE), 0) }
+            .getOrNull().orEmpty()
+            .mapNotNull { it.serviceInfo }
+            .distinctBy { it.packageName }
+            .map { EngineOption(it.packageName, it.loadLabel(pm).toString()) }
+            .sortedWith(compareBy({ it.name != GOOGLE_TTS }, { it.label.lowercase() }))
+    }
+
+    val googleInstalled: Boolean get() = engines().any { it.name == GOOGLE_TTS }
+
+    /**
+     * Picks the engine (null for automatic). Automatic uses Google's Speech Services when it's
+     * installed, since its voices sound far more natural than most phones' built-in ones.
+     */
+    fun setEngine(name: String?) {
+        val model = AiVoices.byEngine(name)
+        if (model != null) {
+            startAi(model)
+            return
+        }
+        if (useAi) stopAi(resume = true)
+        enginePref = name
+        val want = wantedEngine()
+        if (want != requested) restartEngine(want)
+    }
+
+    /** Loads an AI voice model in the background and switches reading over to it. */
+    private fun startAi(model: AiVoiceModel) {
+        if (aiModel == model) return
+        val resumeAt = if (active && !paused) index else null
+        releaseAi()
+        aiModel = model
+        aiError = null
+        showEngine()
+        val myRun = ++aiRun
+        if (resumeAt != null) {
+            run++
+            pendingStart = { speak(resumeAt) }
+        }
+        // Already loaded to play samples: use it straight away.
+        val sampled = sampleSpeech?.takeIf { sampleModel == model }
+        if (sampled != null) {
+            sampleSpeech = null
+            sampleModel = null
+            sampled.stop()
+            sampled.listener = aiListener
+            ai = sampled
+            aiReady()
+            return
+        }
+        aiLoader.execute {
+            val loaded = runCatching {
+                check(AiVoices.isInstalled(appContext, model)) { "This AI voice isn't downloaded" }
+                AiVoices.load(appContext, model)
+            }
+            main.post {
+                if (myRun != aiRun) {
+                    loaded.getOrNull()?.let { runCatching { it.release() } }
+                    return@post
+                }
+                loaded.onSuccess { ai = AiSpeech(it, aiListener) }.onFailure {
+                    aiError = "Couldn't start the AI voice, so your phone's voice is reading instead."
+                    aiModel = null
+                }
+                aiReady()
+            }
+        }
+    }
+
+    private fun aiReady() {
+        showEngine()
+        voicesVersion++
+        languageMissing = if (useAi) !aiSpeaksLanguage() else ready && !hasLanguage()
+        runPending()
+        previewIfReady()
+    }
+
+    /** An AI voice loaded only to play samples in the voice picker, until it's picked or another is sampled. */
+    private var sampleModel: AiVoiceModel? = null
+    private var sampleSpeech: AiSpeech? = null
+    private var sampleRun = 0
+
+    private val quiet = object : AiSpeech.Listener {
+        override fun onStart(run: Int, index: Int) {
+            sampleLoading = null
+        }
+        override fun onWord(run: Int, index: Int, start: Int, end: Int) {}
+        override fun onDone(run: Int, index: Int) {}
+        override fun onError(run: Int) {
+            sampleLoading = null
+        }
+    }
+
+    /** Reading was paused to play a sample, and carries on once a voice is picked or the menu closes. */
+    private var pausedForSample = false
+
+    /** The AI voice ("engine/voice") whose sample is getting ready, so the picker can show it's coming. */
+    var sampleLoading by mutableStateOf<String?>(null)
+        private set
+
+    private fun sampleKey(engine: String?, voice: String?) = "$engine/$voice"
+
+    /** The voice menu closed: let go of any voice loaded only for samples, and carry on reading. */
+    fun closeVoiceMenu() {
+        releaseSample()
+        ai?.takeIf { !active || paused }?.stop()
+        if (pausedForSample) resume()
+    }
+
+    /**
+     * Uses this voice from now on. While reading, the current sentence starts again in the new
+     * voice straight away; otherwise a short sample plays if [sample] is set.
+     */
+    fun choose(engine: String?, voice: String?, sample: Boolean) {
+        sampleLoading = null
+        sampleSpeech?.stop()
+        if (pausedForSample && active && paused) {
+            pausedForSample = false
+            paused = false
+            onStateChange()
+        }
+        pausedForSample = false
+        val reading = active && !paused
+        // Quiet now, so the old voice doesn't carry on while the new one gets ready.
+        run++
+        ai?.stop()
+        if (ready) tts.stop()
+        setEngine(engine)
+        setVoice(voice, restart = false)
+        if (reading) {
+            run++
+            speak(index)
+        } else if (sample) {
+            pendingPreview = voice
+            previewWanted = true
+            previewIfReady()
+        }
+    }
+
+    private fun releaseSample() {
+        sampleRun++
+        sampleLoading = null
+        sampleSpeech?.shutdown()
+        sampleSpeech = null
+        sampleModel = null
+    }
+
+    /** Pauses reading for a sample; it carries on when a voice is picked or the menu closes. */
+    private fun pauseForSample() {
+        if (active && !paused) {
+            pause()
+            pausedForSample = true
+        }
+    }
+
+    /** Short, so a sample starts quickly and every voice says the same thing. */
+    private val aiSample = "Hi! This is how I'll sound reading your book."
+
+    /**
+     * Plays a sample of a voice without choosing it: an AI voice by its engine key and speaker
+     * number, or one of the phone engine's voices by name.
+     */
+    fun hear(engine: String?, voice: String?) {
+        sampleSpeech?.stop()
+        val model = AiVoices.byEngine(engine)
+        if (model == null) {
+            if (!useAi) preview(voice)
+            return
+        }
+        pauseForSample()
+        val speaker = voice?.toIntOrNull() ?: 0
+        val text = listOf(aiSample)
+        ai?.stop()
+        sampleSpeech?.stop()
+        sampleLoading = sampleKey(engine, voice)
+        if (model == aiModel && ai != null) {
+            ai?.start(PREVIEW_RUN, text, 0, speaker, rateState)
+            return
+        }
+        sampleSpeech?.takeIf { sampleModel == model }?.let {
+            it.start(PREVIEW_RUN, text, 0, speaker, rateState)
+            return
+        }
+        releaseSample()
+        sampleLoading = sampleKey(engine, voice)
+        sampleModel = model
+        val myRun = sampleRun
+        aiLoader.execute {
+            val loaded = runCatching { AiVoices.load(appContext, model) }
+            main.post {
+                if (myRun != sampleRun) {
+                    loaded.getOrNull()?.let { runCatching { it.release() } }
+                    return@post
+                }
+                loaded.onSuccess {
+                    sampleSpeech = AiSpeech(it, quiet).also { s -> s.start(PREVIEW_RUN, text, 0, speaker, rateState) }
+                }.onFailure {
+                    sampleModel = null
+                    sampleLoading = null
+                }
+            }
+        }
+    }
+
+    /** Goes back to the phone's own engine. */
+    private fun stopAi(resume: Boolean) {
+        val resumeAt = if (resume && active && !paused) index else null
+        releaseAi()
+        aiModel = null
+        showEngine()
+        voicesVersion++
+        if (resumeAt != null) {
+            run++
+            speak(resumeAt)
+        }
+    }
+
+    private fun releaseAi() {
+        aiRun++
+        ai?.shutdown()
+        ai = null
+    }
+
+    private fun aiSpeaksLanguage() = (language?.language ?: "en") == (aiModel?.language ?: "en")
+
+    private fun showEngine() {
+        engineInUse = aiModel?.engineKey ?: systemEngine
+    }
+
+    /** Runs the start that was waiting for an engine to be ready. */
+    private fun runPending() {
+        val start = pendingStart
+        pendingStart = null
+        start?.invoke()
+    }
+
+    private val aiListener = object : AiSpeech.Listener {
+        override fun onStart(run: Int, index: Int) {
+            if (run == PREVIEW_RUN) sampleLoading = null
+            if (run != this@ReadAloud.run) return
+            this@ReadAloud.index = index
+            onSentence(index)
+        }
+
+        override fun onWord(run: Int, index: Int, start: Int, end: Int) {
+            if (run == this@ReadAloud.run) this@ReadAloud.onWord(index, start, end)
+        }
+
+        override fun onDone(run: Int, index: Int) {
+            if (run != this@ReadAloud.run || !active || paused) return
+            if (index >= sentences.lastIndex) onFinished()
+        }
+
+        override fun onError(run: Int) {
+            if (run == PREVIEW_RUN) sampleLoading = null
+            if (run != this@ReadAloud.run) return
+            aiError = "The AI voice stopped unexpectedly."
+            stop()
+        }
+    }
+
+    /** Re-checks the engines, e.g. after coming back from installing Google's or downloading a voice. */
+    fun refresh() {
+        googleMissingVoices = false
+        val want = wantedEngine()
+        if (want != requested) restartEngine(want) else if (ready) {
+            applyVoice()
+            voicesVersion++
+        }
+    }
+
+    private fun wantedEngine(): String? {
+        val installed = engines().map { it.name }
+        return enginePref?.takeIf { it in installed } ?: GOOGLE_TTS.takeIf { enginePref == null && it in installed && !googleMissingVoices }
+    }
+
+    private fun defaultEngine(): String? = runCatching { tts.defaultEngine }.getOrNull()
+
+    private fun create(engine: String?): TextToSpeech {
+        val myRun = ++engineRun
+        requested = engine
+        val listener = TextToSpeech.OnInitListener { status -> onInit(status, myRun, engine) }
+        return if (engine == null) TextToSpeech(appContext, listener) else TextToSpeech(appContext, listener, engine)
+    }
+
+    private fun restartEngine(engine: String?) {
+        // An AI voice keeps reading while the phone engine behind it restarts.
+        val resumeAt = if (!useAi && active && !paused) index else null
+        if (!useAi) run++
+        ready = false
+        runCatching { tts.stop() }
+        runCatching { tts.shutdown() }
+        tts = create(engine)
+        tts.setOnUtteranceProgressListener(progress)
+        if (resumeAt != null) {
+            run++
+            pendingStart = { speak(resumeAt) }
+        }
+    }
+
+    /** Whether the engine has a downloaded voice for the book's language. */
+    private fun hasLanguage(): Boolean {
+        val lang = language ?: Locale.getDefault()
+        return runCatching { tts.isLanguageAvailable(lang) }.getOrDefault(TextToSpeech.LANG_NOT_SUPPORTED) >= TextToSpeech.LANG_AVAILABLE
+    }
+
+    /** Automatic picked Google but it can't speak this language yet: fall back to the phone's own engine. */
+    private fun fallBackIfGoogleCantSpeak(): Boolean {
+        if (enginePref != null || requested != GOOGLE_TTS || hasLanguage()) return false
+        googleMissingVoices = true
+        restartEngine(null)
+        return true
+    }
 
     /** A voice the reader can pick, with a readable name and what sets it apart. */
     data class VoiceOption(val name: String, val label: String, val network: Boolean, val detail: String? = null)
 
     /** Installed voices for the book's language (all languages if it has none), best first. */
     fun voices(): List<VoiceOption> {
+        aiModel?.let { m ->
+            val count = ai?.speakers ?: m.speakers.size
+            return (0 until count).map { VoiceOption(it.toString(), m.speakers.getOrNull(it) ?: "Voice ${it + 1}", false, "AI voice") }
+        }
         if (!ready) return emptyList()
         val all = runCatching { tts.voices }.getOrNull().orEmpty()
             .filter { TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED !in it.features }
@@ -97,18 +467,66 @@ class ReadAloud(
         }
     }
 
-    /** Uses the named voice from the next sentence on (null for the default). */
-    fun setVoice(name: String?) {
+    /**
+     * Says a short sample in the named voice (null for automatic), pausing any reading first.
+     * Uses the sentence being read when there is one, so the sample is in the book's language.
+     */
+    fun preview(name: String?) {
+        ai?.let { speech ->
+            pauseForSample()
+            sampleLoading = sampleKey(aiModel?.engineKey, name)
+            speech.start(PREVIEW_RUN, listOf(aiSample), 0, name?.toIntOrNull() ?: 0, rateState)
+            return
+        }
+        if (useAi || !ready) return
+        pauseForSample()
+        val voice = name?.let { n -> runCatching { tts.voices }.getOrNull()?.firstOrNull { it.name == n } } ?: bestVoice()
+        if (voice != null) runCatching { tts.voice = voice }
+        previewing = true
+        val sample = sentences.getOrNull(index)?.trim()?.takeIf { it.length in 20..240 }
+            ?: if ((language ?: Locale.getDefault()).language == "en") "This is how I'll sound reading your book." else null
+        if (sample == null) {
+            applyVoice()
+            return
+        }
+        tts.setSpeechRate(rateState)
+        tts.speak(clean(sample), TextToSpeech.QUEUE_FLUSH, null, PREVIEW)
+    }
+
+    /** A voice to play a sample of once the engine just chosen is ready. */
+    private var pendingPreview: String? = null
+    private var previewWanted = false
+
+    private fun previewIfReady() {
+        if (!previewWanted || !canSpeak) return
+        previewWanted = false
+        preview(pendingPreview)
+    }
+
+    /** Uses the named voice (null for the default), starting the current sentence again in it if [restart]. */
+    fun setVoice(name: String?, restart: Boolean = true) {
+        if (name == voiceName) return
         voiceName = name
+        if (useAi) {
+            if (restart && ai != null && active && !paused) {
+                run++
+                speak(index)
+            }
+            return
+        }
         if (!ready) return
         applyVoice()
-        if (active && !paused) {
+        if (restart && active && !paused) {
             run++
             speak(index)
         }
     }
 
+    /** A sample is playing in a voice that may not be the chosen one. */
+    private var previewing = false
+
     private fun applyVoice() {
+        previewing = false
         val name = voiceName
         val voice = name?.let { n -> runCatching { tts.voices }.getOrNull()?.firstOrNull { it.name == n } } ?: bestVoice()
         if (voice != null) runCatching { tts.voice = voice }
@@ -132,70 +550,107 @@ class ReadAloud(
         )
     }
 
-    private fun onInit(status: Int) {
+    private fun onInit(status: Int, myRun: Int, engine: String?) {
         main.post {
+            if (myRun != engineRun) return@post
             if (status == TextToSpeech.SUCCESS) {
                 ready = true
+                available = true
+                systemEngine = engine ?: defaultEngine()
+                showEngine()
+                if (fallBackIfGoogleCantSpeak()) return@post
+                if (!useAi) languageMissing = !hasLanguage()
                 applyVoice()
-                pendingStart?.invoke()
+                voicesVersion++
+                if (!useAi) {
+                    runPending()
+                    previewIfReady()
+                }
+                return@post
+            } else if (engine != null) {
+                // The chosen engine wouldn't start: use the phone's default instead.
+                if (enginePref == null) googleMissingVoices = true
+                val start = pendingStart
+                restartEngine(null)
+                if (start != null) pendingStart = start
+                return@post
             } else {
-                available = false
-                active = false
+                available = useAi
+                if (!useAi) {
+                    active = false
+                    pendingStart = null
+                }
             }
-            pendingStart = null
+        }
+    }
+
+    private val progress = object : UtteranceProgressListener() {
+        override fun onStart(utteranceId: String) {
+            val (r, i) = parse(utteranceId) ?: return
+            main.post {
+                if (r != run) return@post
+                index = i
+                onSentence(i)
+            }
+        }
+
+        override fun onRangeStart(utteranceId: String, start: Int, end: Int, frame: Int) {
+            val (r, i) = parse(utteranceId) ?: return
+            main.post { if (r == run) onWord(i, start, end) }
+        }
+
+        override fun onDone(utteranceId: String) {
+            if (utteranceId == PREVIEW) {
+                main.post { applyVoice() }
+                return
+            }
+            val (r, i) = parse(utteranceId) ?: return
+            main.post {
+                if (r != run || !active || paused) return@post
+                if (i >= sentences.lastIndex) onFinished() else queueAhead()
+            }
+        }
+
+        @Deprecated("Deprecated in Java")
+        override fun onError(utteranceId: String) {
+            val (r, _) = parse(utteranceId) ?: return
+            main.post { if (r == run) stop() }
+        }
+
+        override fun onError(utteranceId: String, errorCode: Int) {
+            if (utteranceId == PREVIEW) {
+                main.post { applyVoice() }
+                return
+            }
+            val (r, _) = parse(utteranceId) ?: return
+            main.post { if (r == run) stop() }
         }
     }
 
     init {
-        tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(utteranceId: String) {
-                val (r, i) = parse(utteranceId) ?: return
-                main.post {
-                    if (r != run) return@post
-                    index = i
-                    onSentence(i)
-                }
-            }
-
-            override fun onRangeStart(utteranceId: String, start: Int, end: Int, frame: Int) {
-                val (r, i) = parse(utteranceId) ?: return
-                main.post { if (r == run) onWord(i, start, end) }
-            }
-
-            override fun onDone(utteranceId: String) {
-                val (r, i) = parse(utteranceId) ?: return
-                main.post {
-                    if (r != run || !active || paused) return@post
-                    if (i >= sentences.lastIndex) onFinished() else queueAhead()
-                }
-            }
-
-            @Deprecated("Deprecated in Java")
-            override fun onError(utteranceId: String) {
-                val (r, _) = parse(utteranceId) ?: return
-                main.post { if (r == run) stop() }
-            }
-
-            override fun onError(utteranceId: String, errorCode: Int) {
-                val (r, _) = parse(utteranceId) ?: return
-                main.post { if (r == run) stop() }
-            }
-        })
+        tts.setOnUtteranceProgressListener(progress)
+        AiVoices.byEngine(engine)?.let { startAi(it) }
     }
 
     fun setLanguage(tag: String?) {
         val locale = tag?.takeIf { it.isNotBlank() }?.let { Locale.forLanguageTag(it) } ?: return
         language = locale
-        if (ready) applyVoice()
+        if (useAi) languageMissing = !aiSpeaksLanguage()
+        if (ready && !fallBackIfGoogleCantSpeak()) {
+            if (!useAi) languageMissing = !hasLanguage()
+            applyVoice()
+            voicesVersion++
+        }
     }
 
     /** Starts reading [texts] from the first sentence. */
     fun play(texts: List<String>) {
+        pausedForSample = false
         run++
         sentences = texts
         active = true
         paused = false
-        if (ready) speak(0) else pendingStart = { speak(0) }
+        speak(0)
         onStateChange()
     }
 
@@ -213,19 +668,23 @@ class ReadAloud(
         run++
         active = true
         paused = false
+        ai?.stop()
         if (ready) tts.stop()
         onStateChange()
     }
 
     fun pause() {
+        pausedForSample = false
         if (!active || paused) return
         run++
         paused = true
-        tts.stop()
+        ai?.stop()
+        if (ready) tts.stop()
         onStateChange()
     }
 
     fun resume() {
+        pausedForSample = false
         if (!active || !paused) return
         run++
         paused = false
@@ -234,16 +693,21 @@ class ReadAloud(
     }
 
     fun stop() {
+        pausedForSample = false
         run++
         active = false
         paused = false
         pendingStart = null
+        ai?.stop()
         if (ready) tts.stop()
         onStateChange()
     }
 
     fun shutdown() {
         stop()
+        releaseSample()
+        releaseAi()
+        aiLoader.shutdown()
         tts.shutdown()
     }
 
@@ -258,6 +722,18 @@ class ReadAloud(
             return
         }
         index = i
+        if (!canSpeak) {
+            // The engine is still starting (e.g. just switched): speak once it's ready.
+            pendingStart = { speak(i) }
+            return
+        }
+        sampleSpeech?.stop()
+        ai?.let { speech ->
+            speech.start(run, sentences.map(::clean), i, voiceName?.toIntOrNull() ?: 0, rateState)
+            queued = sentences.lastIndex
+            return
+        }
+        if (previewing) applyVoice()
         tts.setSpeechRate(rateState)
         tts.speak(clean(sentences[i]), TextToSpeech.QUEUE_FLUSH, null, "$run:$i")
         queued = i
@@ -265,6 +741,7 @@ class ReadAloud(
     }
 
     private fun queueAhead() {
+        if (useAi) return
         while (queued < sentences.lastIndex && queued < index + AHEAD) {
             queued++
             tts.speak(clean(sentences[queued]), TextToSpeech.QUEUE_ADD, null, "$run:$queued")
@@ -289,5 +766,24 @@ class ReadAloud(
         val r = id.substringBefore(':').toIntOrNull() ?: return null
         val i = id.substringAfter(':').toIntOrNull() ?: return null
         return r to i
+    }
+}
+
+/** Opens the screens where the reader gets better voices. */
+object VoiceSetup {
+    /** Speech Services by Google on the Play Store. */
+    fun getGoogle(context: Context) {
+        val id = ReadAloud.GOOGLE_TTS
+        val store = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$id")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        val web = Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=$id")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { context.startActivity(store) }.recoverCatching { context.startActivity(web) }
+    }
+
+    /** The engine's own voice downloads, or the phone's text-to-speech settings if it has none. */
+    fun downloadVoices(context: Context, engine: String?) {
+        val install = Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (engine != null) install.setPackage(engine)
+        val settings = Intent("com.android.settings.TTS_SETTINGS").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { context.startActivity(install) }.recoverCatching { context.startActivity(settings) }
     }
 }

@@ -43,6 +43,8 @@ data class ReaderSettings(
     /** Read-aloud speed (1 = normal) and voice name; null voice = the engine's default. */
     val speechRate: Float = 1f,
     val voice: String? = null,
+    /** Text-to-speech engine package; null = Google's when installed, else the phone's default. */
+    val ttsEngine: String? = null,
     /** How the library grid is ordered (a SortOrder name). */
     val librarySort: String = "Recent",
     /** The library shows books as spines on wooden shelves instead of a grid of covers. */
@@ -130,6 +132,7 @@ class SettingsRepository(context: Context) {
             .putBoolean("volumeKeysTurnPages", next.volumeKeys)
             .putFloat("speechRate", next.speechRate)
             .putString("voice", next.voice)
+            .putString("ttsEngine", next.ttsEngine)
             .putString("librarySort", next.librarySort)
             .putBoolean("shelfView", next.shelfView)
             .putBoolean("groupSeries", next.groupSeries)
@@ -236,6 +239,7 @@ class SettingsRepository(context: Context) {
             volumeKeys = prefs.getBoolean("volumeKeysTurnPages", d.volumeKeys),
             speechRate = prefs.getFloat("speechRate", d.speechRate),
             voice = prefs.getString("voice", null),
+            ttsEngine = prefs.getString("ttsEngine", null),
             librarySort = prefs.getString("librarySort", null) ?: d.librarySort,
             shelfView = prefs.getBoolean("shelfView", d.shelfView),
             groupSeries = prefs.getBoolean("groupSeries", d.groupSeries),
