@@ -31,6 +31,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Button
@@ -474,6 +475,8 @@ internal fun ReadAloudSheet(
     sleepMinutes: Int?,
     sleepAtChapterEnd: Boolean,
     onVoice: (String?) -> Unit,
+    /** Plays a short sample of a voice (null = automatic). */
+    onPreview: (String?) -> Unit,
     onRate: (Float) -> Unit,
     onSleep: (minutes: Int?, chapterEnd: Boolean) -> Unit,
     onDismiss: () -> Unit,
@@ -567,9 +570,9 @@ internal fun ReadAloudSheet(
 
             Text("Voice", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Column {
-                VoiceRow("Automatic", "The most natural voice on your phone", voice == null) { onVoice(null) }
+                VoiceRow("Automatic", "The most natural voice on your phone", voice == null, onPlay = { onPreview(null) }) { onVoice(null) }
                 voices.forEach { v ->
-                    VoiceRow(v.label, v.detail, voice == v.name) { onVoice(v.name) }
+                    VoiceRow(v.label, v.detail, voice == v.name, onPlay = { onPreview(v.name) }) { onVoice(v.name) }
                 }
                 if (voices.isEmpty()) {
                     Text(
@@ -585,7 +588,7 @@ internal fun ReadAloudSheet(
 }
 
 @Composable
-private fun VoiceRow(label: String, detail: String?, selected: Boolean, onClick: () -> Unit) {
+private fun VoiceRow(label: String, detail: String?, selected: Boolean, onPlay: (() -> Unit)? = null, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -596,10 +599,15 @@ private fun VoiceRow(label: String, detail: String?, selected: Boolean, onClick:
     ) {
         RadioButton(selected = selected, onClick = onClick)
         Spacer(Modifier.width(8.dp))
-        Column {
+        Column(Modifier.weight(1f)) {
             Text(label, style = MaterialTheme.typography.bodyLarge)
             if (detail != null) {
                 Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        if (onPlay != null) {
+            IconButton(onClick = onPlay) {
+                Icon(Icons.Filled.PlayArrow, contentDescription = "Hear $label", tint = MaterialTheme.colorScheme.primary)
             }
         }
     }

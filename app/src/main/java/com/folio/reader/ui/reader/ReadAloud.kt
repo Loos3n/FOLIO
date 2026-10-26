@@ -56,6 +56,7 @@ class ReadAloud(
         private const val AHEAD = 2
         /** Speech Services by Google, whose voices sound the most natural on most phones. */
         const val GOOGLE_TTS = "com.google.android.tts"
+        private const val PREVIEW = "preview"
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -201,6 +202,26 @@ class ReadAloud(
         }
     }
 
+    /**
+     * Says a short sample in the named voice (null for automatic), pausing any reading first.
+     * Uses the sentence being read when there is one, so the sample is in the book's language.
+     */
+    fun preview(name: String?) {
+        if (!ready) return
+        if (active && !paused) pause()
+        val voice = name?.let { n -> runCatching { tts.voices }.getOrNull()?.firstOrNull { it.name == n } } ?: bestVoice()
+        if (voice != null) runCatching { tts.voice = voice }
+        previewing = true
+        val sample = sentences.getOrNull(index)?.trim()?.takeIf { it.length in 20..240 }
+            ?: if ((language ?: Locale.getDefault()).language == "en") "This is how I'll sound reading your book." else null
+        if (sample == null) {
+            applyVoice()
+            return
+        }
+        tts.setSpeechRate(rateState)
+        tts.speak(clean(sample), TextToSpeech.QUEUE_FLUSH, null, PREVIEW)
+    }
+
     /** Uses the named voice from the next sentence on (null for the default). */
     fun setVoice(name: String?) {
         voiceName = name
@@ -212,7 +233,11 @@ class ReadAloud(
         }
     }
 
+    /** A sample is playing in a voice that may not be the chosen one. */
+    private var previewing = false
+
     private fun applyVoice() {
+        previewing = false
         val name = voiceName
         val voice = name?.let { n -> runCatching { tts.voices }.getOrNull()?.firstOrNull { it.name == n } } ?: bestVoice()
         if (voice != null) runCatching { tts.voice = voice }
@@ -279,6 +304,10 @@ class ReadAloud(
         }
 
         override fun onDone(utteranceId: String) {
+            if (utteranceId == PREVIEW) {
+                main.post { applyVoice() }
+                return
+            }
             val (r, i) = parse(utteranceId) ?: return
             main.post {
                 if (r != run || !active || paused) return@post
@@ -293,6 +322,10 @@ class ReadAloud(
         }
 
         override fun onError(utteranceId: String, errorCode: Int) {
+            if (utteranceId == PREVIEW) {
+                main.post { applyVoice() }
+                return
+            }
             val (r, _) = parse(utteranceId) ?: return
             main.post { if (r == run) stop() }
         }
@@ -386,6 +419,7 @@ class ReadAloud(
             pendingStart = { speak(i) }
             return
         }
+        if (previewing) applyVoice()
         tts.setSpeechRate(rateState)
         tts.speak(clean(sentences[i]), TextToSpeech.QUEUE_FLUSH, null, "$run:$i")
         queued = i

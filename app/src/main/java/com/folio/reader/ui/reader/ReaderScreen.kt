@@ -874,6 +874,7 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
                 sleepMinutes = sleepEndsAt?.let { ((it - now + 59_999) / 60_000).toInt() },
                 sleepAtChapterEnd = sleepAtChapterEnd,
                 onVoice = { name -> vm.updateSettings { it.copy(voice = name) } },
+                onPreview = { readAloud.preview(it) },
                 onRate = { readAloud.rate = it },
                 onSleep = { minutes, chapterEnd ->
                     sleepAtChapterEnd = chapterEnd
