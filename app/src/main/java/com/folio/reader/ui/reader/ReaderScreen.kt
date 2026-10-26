@@ -861,6 +861,7 @@ fun ReaderScreen(bookId: String, onBack: () -> Unit, onOriginalPages: (() -> Uni
                 engineInUse = readAloud.engineInUse,
                 googleMissingVoices = readAloud.googleMissingVoices,
                 languageMissing = readAloud.languageMissing,
+                aiError = readAloud.aiError,
                 onEngine = { name -> vm.updateSettings { it.copy(ttsEngine = name, voice = null) } },
                 onGetGoogle = {
                     voiceSetupOpened = true

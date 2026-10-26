@@ -6,3 +6,6 @@ local.properties
 .DS_Store
 captures/
 .kotlin/
+
+# Downloaded by the build workflow (speech library).
+app/src/main/jniLibs/

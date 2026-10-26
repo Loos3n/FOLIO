@@ -467,6 +467,8 @@ internal fun ReadAloudSheet(
     engineInUse: String?,
     googleMissingVoices: Boolean,
     languageMissing: Boolean,
+    /** Why the chosen AI voice couldn't be used, if it couldn't. */
+    aiError: String?,
     onEngine: (String?) -> Unit,
     onGetGoogle: () -> Unit,
     onDownloadVoices: () -> Unit,
@@ -529,7 +531,9 @@ internal fun ReadAloudSheet(
                 )
             }
 
-            Text("Voice engine", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            AiVoicesSection(engine = engine, aiError = aiError, onEngine = onEngine)
+
+            Text("Phone voices", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             val google = engines.firstOrNull { it.name == ReadAloud.GOOGLE_TTS }
             if (google == null) {
                 Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.secondaryContainer) {
