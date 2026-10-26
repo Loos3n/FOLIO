@@ -1,6 +1,8 @@
 package com.folio.reader.ui.reader
 
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.speech.tts.TextToSpeech
@@ -19,6 +21,8 @@ import java.util.Locale
  */
 class ReadAloud(
     context: Context,
+    /** The text-to-speech engine to start with (null = automatic). */
+    engine: String? = null,
     private val onSentence: (index: Int) -> Unit,
     private val onWord: (index: Int, start: Int, end: Int) -> Unit,
     /** Every sentence handed to [play] has been spoken. */
@@ -47,9 +51,11 @@ class ReadAloud(
             }
         }
 
-    private companion object {
+    companion object {
         /** Sentences kept queued beyond the one being spoken. */
-        const val AHEAD = 2
+        private const val AHEAD = 2
+        /** Speech Services by Google, whose voices sound the most natural on most phones. */
+        const val GOOGLE_TTS = "com.google.android.tts"
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -63,8 +69,106 @@ class ReadAloud(
     private var run = 0
     private var language: Locale? = null
 
-    private val tts: TextToSpeech = TextToSpeech(context.applicationContext) { status -> onInit(status) }
+    private val appContext = context.applicationContext
+    /** The engine actually speaking, once it's ready. */
+    var engineInUse by mutableStateOf<String?>(null)
+        private set
+    /** Automatic wanted Google's voices, but Google has none downloaded for the book's language. */
+    var googleMissingVoices by mutableStateOf(false)
+        private set
+    /** The engine in use has no downloaded voice for the book's language. */
+    var languageMissing by mutableStateOf(false)
+        private set
+    /** Changes whenever the engine or its voices may have changed, so lists can be re-read. */
+    var voicesVersion by mutableStateOf(0)
+        private set
+
+    /** The engine asked for: a package name, or null for automatic (Google's when it has the language). */
+    private var enginePref: String? = engine
+    /** Bumped each time the engine is recreated, so a late init from an old one is ignored. */
+    private var engineRun = 0
+    /** The engine last started (null = the phone's default). */
+    private var requested: String? = null
+    private var tts: TextToSpeech = create(wantedEngine())
     private var voiceName: String? = null
+
+    /** A text-to-speech app on the phone. */
+    data class EngineOption(val name: String, val label: String)
+
+    /** Every text-to-speech app installed. */
+    fun engines(): List<EngineOption> {
+        val pm = appContext.packageManager
+        return runCatching { pm.queryIntentServices(Intent(TextToSpeech.Engine.INTENT_ACTION_TTS_SERVICE), 0) }
+            .getOrNull().orEmpty()
+            .mapNotNull { it.serviceInfo }
+            .distinctBy { it.packageName }
+            .map { EngineOption(it.packageName, it.loadLabel(pm).toString()) }
+            .sortedWith(compareBy({ it.name != GOOGLE_TTS }, { it.label.lowercase() }))
+    }
+
+    val googleInstalled: Boolean get() = engines().any { it.name == GOOGLE_TTS }
+
+    /**
+     * Picks the engine (null for automatic). Automatic uses Google's Speech Services when it's
+     * installed, since its voices sound far more natural than most phones' built-in ones.
+     */
+    fun setEngine(name: String?) {
+        enginePref = name
+        val want = wantedEngine()
+        if (want != requested) restartEngine(want)
+    }
+
+    /** Re-checks the engines, e.g. after coming back from installing Google's or downloading a voice. */
+    fun refresh() {
+        googleMissingVoices = false
+        val want = wantedEngine()
+        if (want != requested) restartEngine(want) else if (ready) {
+            applyVoice()
+            voicesVersion++
+        }
+    }
+
+    private fun wantedEngine(): String? {
+        val installed = engines().map { it.name }
+        return enginePref?.takeIf { it in installed } ?: GOOGLE_TTS.takeIf { enginePref == null && it in installed && !googleMissingVoices }
+    }
+
+    private fun defaultEngine(): String? = runCatching { tts.defaultEngine }.getOrNull()
+
+    private fun create(engine: String?): TextToSpeech {
+        val myRun = ++engineRun
+        requested = engine
+        val listener = TextToSpeech.OnInitListener { status -> onInit(status, myRun, engine) }
+        return if (engine == null) TextToSpeech(appContext, listener) else TextToSpeech(appContext, listener, engine)
+    }
+
+    private fun restartEngine(engine: String?) {
+        val resumeAt = if (active && !paused) index else null
+        run++
+        ready = false
+        runCatching { tts.stop() }
+        runCatching { tts.shutdown() }
+        tts = create(engine)
+        tts.setOnUtteranceProgressListener(progress)
+        if (resumeAt != null) {
+            run++
+            pendingStart = { speak(resumeAt) }
+        }
+    }
+
+    /** Whether the engine has a downloaded voice for the book's language. */
+    private fun hasLanguage(): Boolean {
+        val lang = language ?: Locale.getDefault()
+        return runCatching { tts.isLanguageAvailable(lang) }.getOrDefault(TextToSpeech.LANG_NOT_SUPPORTED) >= TextToSpeech.LANG_AVAILABLE
+    }
+
+    /** Automatic picked Google but it can't speak this language yet: fall back to the phone's own engine. */
+    private fun fallBackIfGoogleCantSpeak(): Boolean {
+        if (enginePref != null || requested != GOOGLE_TTS || hasLanguage()) return false
+        googleMissingVoices = true
+        restartEngine(null)
+        return true
+    }
 
     /** A voice the reader can pick, with a readable name and what sets it apart. */
     data class VoiceOption(val name: String, val label: String, val network: Boolean, val detail: String? = null)
@@ -132,12 +236,25 @@ class ReadAloud(
         )
     }
 
-    private fun onInit(status: Int) {
+    private fun onInit(status: Int, myRun: Int, engine: String?) {
         main.post {
+            if (myRun != engineRun) return@post
             if (status == TextToSpeech.SUCCESS) {
                 ready = true
+                available = true
+                engineInUse = engine ?: defaultEngine()
+                if (fallBackIfGoogleCantSpeak()) return@post
+                languageMissing = !hasLanguage()
                 applyVoice()
+                voicesVersion++
                 pendingStart?.invoke()
+            } else if (engine != null) {
+                // The chosen engine wouldn't start: use the phone's default instead.
+                if (enginePref == null) googleMissingVoices = true
+                val start = pendingStart
+                restartEngine(null)
+                if (start != null) pendingStart = start
+                return@post
             } else {
                 available = false
                 active = false
@@ -146,47 +263,53 @@ class ReadAloud(
         }
     }
 
+    private val progress = object : UtteranceProgressListener() {
+        override fun onStart(utteranceId: String) {
+            val (r, i) = parse(utteranceId) ?: return
+            main.post {
+                if (r != run) return@post
+                index = i
+                onSentence(i)
+            }
+        }
+
+        override fun onRangeStart(utteranceId: String, start: Int, end: Int, frame: Int) {
+            val (r, i) = parse(utteranceId) ?: return
+            main.post { if (r == run) onWord(i, start, end) }
+        }
+
+        override fun onDone(utteranceId: String) {
+            val (r, i) = parse(utteranceId) ?: return
+            main.post {
+                if (r != run || !active || paused) return@post
+                if (i >= sentences.lastIndex) onFinished() else queueAhead()
+            }
+        }
+
+        @Deprecated("Deprecated in Java")
+        override fun onError(utteranceId: String) {
+            val (r, _) = parse(utteranceId) ?: return
+            main.post { if (r == run) stop() }
+        }
+
+        override fun onError(utteranceId: String, errorCode: Int) {
+            val (r, _) = parse(utteranceId) ?: return
+            main.post { if (r == run) stop() }
+        }
+    }
+
     init {
-        tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(utteranceId: String) {
-                val (r, i) = parse(utteranceId) ?: return
-                main.post {
-                    if (r != run) return@post
-                    index = i
-                    onSentence(i)
-                }
-            }
-
-            override fun onRangeStart(utteranceId: String, start: Int, end: Int, frame: Int) {
-                val (r, i) = parse(utteranceId) ?: return
-                main.post { if (r == run) onWord(i, start, end) }
-            }
-
-            override fun onDone(utteranceId: String) {
-                val (r, i) = parse(utteranceId) ?: return
-                main.post {
-                    if (r != run || !active || paused) return@post
-                    if (i >= sentences.lastIndex) onFinished() else queueAhead()
-                }
-            }
-
-            @Deprecated("Deprecated in Java")
-            override fun onError(utteranceId: String) {
-                val (r, _) = parse(utteranceId) ?: return
-                main.post { if (r == run) stop() }
-            }
-
-            override fun onError(utteranceId: String, errorCode: Int) {
-                val (r, _) = parse(utteranceId) ?: return
-                main.post { if (r == run) stop() }
-            }
-        })
+        tts.setOnUtteranceProgressListener(progress)
     }
 
     fun setLanguage(tag: String?) {
         val locale = tag?.takeIf { it.isNotBlank() }?.let { Locale.forLanguageTag(it) } ?: return
         language = locale
-        if (ready) applyVoice()
+        if (ready && !fallBackIfGoogleCantSpeak()) {
+            languageMissing = !hasLanguage()
+            applyVoice()
+            voicesVersion++
+        }
     }
 
     /** Starts reading [texts] from the first sentence. */
@@ -258,6 +381,11 @@ class ReadAloud(
             return
         }
         index = i
+        if (!ready) {
+            // The engine is still starting (e.g. just switched): speak once it's ready.
+            pendingStart = { speak(i) }
+            return
+        }
         tts.setSpeechRate(rateState)
         tts.speak(clean(sentences[i]), TextToSpeech.QUEUE_FLUSH, null, "$run:$i")
         queued = i
@@ -289,5 +417,24 @@ class ReadAloud(
         val r = id.substringBefore(':').toIntOrNull() ?: return null
         val i = id.substringAfter(':').toIntOrNull() ?: return null
         return r to i
+    }
+}
+
+/** Opens the screens where the reader gets better voices. */
+object VoiceSetup {
+    /** Speech Services by Google on the Play Store. */
+    fun getGoogle(context: Context) {
+        val id = ReadAloud.GOOGLE_TTS
+        val store = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$id")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        val web = Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=$id")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { context.startActivity(store) }.recoverCatching { context.startActivity(web) }
+    }
+
+    /** The engine's own voice downloads, or the phone's text-to-speech settings if it has none. */
+    fun downloadVoices(context: Context, engine: String?) {
+        val install = Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (engine != null) install.setPackage(engine)
+        val settings = Intent("com.android.settings.TTS_SETTINGS").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { context.startActivity(install) }.recoverCatching { context.startActivity(settings) }
     }
 }

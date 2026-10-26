@@ -460,6 +460,15 @@ internal fun DictionarySheet(term: String, onWebSearch: () -> Unit, onDismiss: (
 internal fun ReadAloudSheet(
     voices: List<ReadAloud.VoiceOption>,
     voice: String?,
+    engines: List<ReadAloud.EngineOption>,
+    /** The engine chosen in settings; null = automatic. */
+    engine: String?,
+    engineInUse: String?,
+    googleMissingVoices: Boolean,
+    languageMissing: Boolean,
+    onEngine: (String?) -> Unit,
+    onGetGoogle: () -> Unit,
+    onDownloadVoices: () -> Unit,
     rate: Float,
     /** Minutes left on the timer, if one is set. */
     sleepMinutes: Int?,
@@ -515,6 +524,45 @@ internal fun ReadAloudSheet(
                     modifier = Modifier.width(56.dp),
                     textAlign = TextAlign.End,
                 )
+            }
+
+            Text("Voice engine", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            val google = engines.firstOrNull { it.name == ReadAloud.GOOGLE_TTS }
+            if (google == null) {
+                Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.secondaryContainer) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Get more natural voices", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            "Speech Services by Google is free and sounds much more like a real person than most phones' built-in voice.",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        FilledTonalButton(onClick = onGetGoogle) { Text("Get it on Google Play") }
+                    }
+                }
+            }
+            Column {
+                VoiceRow(
+                    "Automatic",
+                    if (google != null) "Google's voices when they're downloaded" else "Your phone's default voice",
+                    engine == null,
+                ) { onEngine(null) }
+                engines.forEach { e ->
+                    VoiceRow(e.label, if (e.name == engineInUse) "Reading now" else null, engine == e.name) { onEngine(e.name) }
+                }
+            }
+            if (googleMissingVoices || languageMissing) {
+                Text(
+                    if (googleMissingVoices) {
+                        "Google's voice for this book's language isn't downloaded yet, so your phone's own voice is reading. Download it for a more natural sound."
+                    } else {
+                        "This voice engine has no voice downloaded for this book's language yet."
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            if (google != null || languageMissing) {
+                TextButton(onClick = onDownloadVoices) { Text("Download more natural voices") }
             }
 
             Text("Voice", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
