@@ -168,6 +168,8 @@ class ReadAloud(
             aiReady()
             return
         }
+        // A sample still loading would otherwise start talking over the reading once it's ready.
+        releaseSample()
         aiLoader.execute {
             val loaded = runCatching {
                 check(AiVoices.isInstalled(appContext, model)) { "This AI voice isn't downloaded" }
@@ -199,6 +201,8 @@ class ReadAloud(
     private var sampleModel: AiVoiceModel? = null
     private var sampleSpeech: AiSpeech? = null
     private var sampleRun = 0
+    /** The speaker to play once the sample voice has loaded: the last one tapped while it loads. */
+    private var sampleSpeaker = 0
 
     private val quiet = object : AiSpeech.Listener {
         override fun onStart(run: Int, index: Int) {
@@ -301,9 +305,15 @@ class ReadAloud(
             it.start(PREVIEW_RUN, text, 0, speaker, rateState)
             return
         }
+        if (sampleModel == model && sampleSpeech == null) {
+            // Already loading: play this speaker when it's ready rather than loading it twice.
+            sampleSpeaker = speaker
+            return
+        }
         releaseSample()
         sampleLoading = sampleKey(engine, voice)
         sampleModel = model
+        sampleSpeaker = speaker
         val myRun = sampleRun
         aiLoader.execute {
             val loaded = runCatching { AiVoices.load(appContext, model) }
@@ -313,7 +323,7 @@ class ReadAloud(
                     return@post
                 }
                 loaded.onSuccess {
-                    sampleSpeech = AiSpeech(it, quiet).also { s -> s.start(PREVIEW_RUN, text, 0, speaker, rateState) }
+                    sampleSpeech = AiSpeech(it, quiet).also { s -> s.start(PREVIEW_RUN, text, 0, sampleSpeaker, rateState) }
                 }.onFailure {
                     sampleModel = null
                     sampleLoading = null
