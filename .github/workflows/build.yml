@@ -36,6 +36,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           V=1.12.40
+          # Published once; later builds skip the large download.
+          if gh release view "speech-libs-$V" >/dev/null 2>&1; then echo "speech-libs-$V already published"; exit 0; fi
           mkdir sherpa libs
           if curl -fsSL -o sherpa.tar.bz2 "https://github.com/k2-fsa/sherpa-onnx/releases/download/v$V/sherpa-onnx-v$V-android.tar.bz2"; then
             tar xjf sherpa.tar.bz2 -C sherpa

@@ -158,7 +158,11 @@ object AiVoices {
             if (jobs[model.id]?.isActive == true) return
             _failed.value = null
             _progress.update { it + (model.id to Progress(0f)) }
+            // A download just cancelled may still be letting go of the same files.
+            val previous = jobs[model.id]
             jobs[model.id] = scope.launch {
+                previous?.join()
+                _progress.update { it + (model.id to Progress(0f)) }
                 val archive = File(app.cacheDir, "${model.id}.tar.bz2.part")
                 val staging = File(root(app), "${model.id}.unpacking")
                 try {
@@ -189,7 +193,7 @@ object AiVoices {
     }
 
     fun cancel(model: AiVoiceModel) {
-        synchronized(jobs) { jobs.remove(model.id)?.cancel() }
+        synchronized(jobs) { jobs[model.id]?.cancel() }
     }
 
     fun delete(context: Context, model: AiVoiceModel) {
